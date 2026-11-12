@@ -1,47 +1,69 @@
 import type { FastifyInstance } from 'fastify';
-import { systemClock, type Clock } from './clock.ts';
 import { loadConfig, type Config } from './config.ts';
-import { openDatabase, type Db } from './db.ts';
-import { createApp } from './server.ts';
+import { systemClock, type Clock } from './contracts.ts';
+import { openStorage, type SqliteStorage } from './db.ts';
+import { createApp, loggerOptions, type AppDependencies, type FeaturePlugin } from './routes.ts';
 
 export interface RunningService {
   app: FastifyInstance;
-  db: Db;
+  storage: SqliteStorage;
   config: Config;
   /** Actual listening port (useful when R2_PORT=0). */
   port: number;
   stop(): Promise<void>;
 }
 
-/** Start R2: open and migrate SQLite, then listen on loopback. Works without OpenAI. */
-export async function startService(
-  env: NodeJS.ProcessEnv,
-  clock: Clock = systemClock,
-  logger?: Parameters<typeof createApp>[0]['logger'],
-): Promise<RunningService> {
-  const config = loadConfig(env);
-  const db = openDatabase(config.dbPath, clock);
-  const app = createApp({ config, db, clock, ...(logger !== undefined ? { logger } : {}) });
+export interface StartOptions {
+  clock?: Clock;
+  logger?: AppDependencies['logger'];
+  featurePlugins?: readonly FeaturePlugin[];
+  /** Injected adapters and worker; tests supply fakes. */
+  adapters?: Pick<AppDependencies, 'modelInterpreter' | 'pushTransport' | 'worker' | 'webRoot'>;
+  /** Directory holding the checkout, for the "data outside the checkout" rule. */
+  checkoutRoot?: string;
+}
+
+/** Start R2: validate configuration, open and migrate SQLite, then listen on loopback. */
+export async function startService(env: NodeJS.ProcessEnv, options: StartOptions = {}): Promise<RunningService> {
+  const clock = options.clock ?? systemClock;
+  const config = loadConfig(env, options.checkoutRoot !== undefined ? { checkoutRoot: options.checkoutRoot } : {});
+  const storage = openStorage(config.dbPath, clock);
+  const app = createApp(
+    {
+      config,
+      storage,
+      clock,
+      logger: options.logger ?? loggerOptions('info'),
+      ...options.adapters,
+    },
+    options.featurePlugins ?? [],
+  );
   try {
     await app.listen({ host: config.host, port: config.port });
   } catch (error) {
-    db.close();
+    await app.close().catch(() => undefined);
+    storage.close();
     throw error;
   }
   const address = app.server.address();
   const port = typeof address === 'object' && address ? address.port : config.port;
-  if (config.openai.apiKey === undefined) {
-    app.log.warn('OPENAI_API_KEY is not set; new reminder requests are unavailable, saved reminders still send');
+  if (!config.chat.enabled) {
+    app.log.warn({ reason: config.chat.reason }, 'Chat is disabled; saved reminders still send');
   }
+  if (!config.auth.enabled) app.log.warn('R2_PASSWORD_HASH is not set; owner login is not ready');
+  if (!config.push.enabled) app.log.warn({ reason: config.push.reason }, 'VAPID is not configured; push is not ready');
   app.log.info({ host: config.host, port }, 'R2 listening');
   return {
     app,
-    db,
+    storage,
     config,
     port,
     async stop() {
-      await app.close();
-      db.close();
+      try {
+        await app.close();
+      } finally {
+        storage.close();
+      }
     },
   };
 }

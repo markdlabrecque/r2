@@ -1,4 +1,3 @@
-import { ConfigError } from './config.ts';
 import { startService } from './service.ts';
 
 try {
@@ -20,6 +19,6 @@ try {
   process.on('SIGINT', () => shutdown('SIGINT'));
 } catch (error) {
   // Startup errors name the problem but never print environment values such as keys.
-  console.error(`R2 failed to start: ${error instanceof ConfigError || error instanceof Error ? error.message : 'unknown error'}`);
+  console.error(`R2 failed to start: ${error instanceof Error ? error.message : 'unknown error'}`);
   process.exit(1);
 }
