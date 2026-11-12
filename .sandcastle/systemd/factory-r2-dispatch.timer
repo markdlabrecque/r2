@@ -1,0 +1,11 @@
+[Unit]
+Description=Advance R2 Factory tasks every five minutes
+
+[Timer]
+OnActiveSec=5min
+OnUnitInactiveSec=5min
+AccuracySec=1s
+Unit=factory-r2-dispatch.service
+
+[Install]
+WantedBy=timers.target

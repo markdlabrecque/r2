@@ -43,6 +43,16 @@ test('CI runs on every PR and requires application checks once source exists', (
   assert.doesNotMatch(ci, /continue-on-error|--if-present/);
 });
 
+test('R2 scheduler keeps detached runs alive and uses a five-minute interval', () => {
+  const service = read('systemd/factory-r2-dispatch.service');
+  const timer = read('systemd/factory-r2-dispatch.timer');
+  assert.match(service, /^KillMode=process$/m);
+  assert.match(service, /^TimeoutStartSec=infinity$/m);
+  assert.match(service, /^ExecStart=%h\/Projects\/r2\/code\/main\/\.sandcastle\/factory-dispatch\.sh$/m);
+  assert.match(timer, /^OnUnitInactiveSec=5min$/m);
+  assert.match(timer, /^Unit=factory-r2-dispatch\.service$/m);
+});
+
 test('Factory credential file is ignored and image copies no host credentials', () => {
   assert.match(read('.gitignore'), /^\.env$/m);
   const dockerfile = read('Dockerfile');

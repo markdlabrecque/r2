@@ -22,7 +22,15 @@ factory dispatch
 factory status
 ```
 
-Factory passes are manual for now. `factory dispatch` performs one pass; it does not install a scheduler. Subsequent passes reconcile merged work and start newly unblocked tasks. The board can show other projects too.
+The local R2-only user timer runs a dispatcher pass five minutes after each pass ends. It reconciles merged work and starts newly unblocked tasks. The checkout must remain on `spike-1`; both entrypoints refuse another branch. Other projects' timers are unchanged. The board can show other projects too.
+
+```sh
+systemctl --user status factory-r2-dispatch.timer
+journalctl --user -u factory-r2-dispatch.service
+systemctl --user disable --now factory-r2-dispatch.timer  # stop future passes
+```
+
+Stopping the timer does not stop ticket runs that already started. Factory's failed runs require an explicit retry. Unit templates are in `.sandcastle/systemd/`; their paths match this checkout on the setup machine. On another machine, adapt the paths before installing the two user units. The local Claude token remains outside Git.
 
 ### Agent credential
 
