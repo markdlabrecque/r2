@@ -22,10 +22,14 @@ RUN groupmod -o -g "$AGENT_GID" node \
 USER ${AGENT_UID}:${AGENT_GID}
 WORKDIR /home/agent
 
-RUN git clone --depth 1 --branch v1.6.0 \
-    https://github.com/markdlabrecque/pi-claude-subscription.git \
-    /home/agent/.pi/agent/extensions/pi-claude-subscription \
+# Includes b3dfb24: image-bearing tool results in replay and resume prompts.
+RUN git init /home/agent/.pi/agent/extensions/pi-claude-subscription \
     && cd /home/agent/.pi/agent/extensions/pi-claude-subscription \
+    && git remote add origin https://github.com/markdlabrecque/pi-claude-subscription.git \
+    && git fetch --depth 1 origin 05be412cb37cf3b5f5436ed88694c2a84f69bdb6 \
+    && git checkout --detach FETCH_HEAD \
+    && test "$(git rev-parse HEAD)" = "05be412cb37cf3b5f5436ed88694c2a84f69bdb6" \
+    && git rev-parse HEAD > .factory-revision \
     && npm ci --omit=dev --ignore-scripts \
     && rm -rf .git
 

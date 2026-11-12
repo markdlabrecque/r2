@@ -48,6 +48,16 @@ CI runs on every PR. The initial automation scaffold runs `npm run test:factory`
 
 The image contains Playwright 1.65.0 and Chromium. Application tasks must retain that version for browser compatibility and preserve the automation dependencies and scripts when extending `package.json`.
 
+The sandbox pins `pi-claude-subscription` to upstream commit `05be412cb37cf3b5f5436ed88694c2a84f69bdb6`, which includes the image-handling fix `b3dfb24`. The baked `.factory-revision` file records the fetched commit. Package version numbers do not identify this fix.
+
+After an image rebuild, run the credential-free request-construction probe. It checks the baked revision and source hash, accepts an image-bearing `read` result in replay and resume, and rejects malformed attachments. It does not call Claude or prove a live model response.
+
+```sh
+docker run --rm \
+  --mount type=bind,src="$PWD/.sandcastle/probes/image-results.mjs",dst=/tmp/image-results.mjs,readonly \
+  --entrypoint node sandcastle-r2 /tmp/image-results.mjs
+```
+
 Real Firefox notifications, Tailscale isolation, and host restart need owner-run evidence on a non-production host. Mocked browser tests do not satisfy those gates. The final task and parent remain incomplete until that evidence exists.
 
 ## Private installation

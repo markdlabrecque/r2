@@ -53,6 +53,13 @@ test('R2 scheduler keeps detached runs alive and uses a five-minute interval', (
   assert.match(timer, /^Unit=factory-r2-dispatch\.service$/m);
 });
 
+test('sandbox pins the upstream image-handling fix to an immutable commit', () => {
+  const dockerfile = read('Dockerfile');
+  assert.match(dockerfile, /git fetch --depth 1 origin 05be412cb37cf3b5f5436ed88694c2a84f69bdb6/);
+  assert.match(dockerfile, /git rev-parse HEAD > \.factory-revision/);
+  assert.doesNotMatch(dockerfile, /--branch v1\.6\.0/);
+});
+
 test('Factory credential file is ignored and image copies no host credentials', () => {
   assert.match(read('.gitignore'), /^\.env$/m);
   const dockerfile = read('Dockerfile');
