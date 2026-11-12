@@ -28,6 +28,26 @@
           <button type="submit">Save timezone</button>
           <p id="settings-status" role="status" aria-live="polite"></p>
         </form>
+        <section id="chat-section">
+          <h2>Chat</h2>
+          <form id="chat">
+            <label for="message">Ask for a one-off reminder</label>
+            <input id="message" name="message" type="text" autocomplete="off" required maxlength="1000" />
+            <button type="submit" id="send">Send</button>
+          </form>
+          <p id="reply" role="status" aria-live="polite"></p>
+          <div id="proposal" hidden>
+            <p id="proposal-text"></p>
+            <p id="proposal-when"></p>
+            <button id="confirm" type="button">Save reminder</button>
+            <button id="discard" type="button">Discard</button>
+          </div>
+          <p id="confirm-status" role="status" aria-live="polite"></p>
+        </section>
+        <section id="reminders-section">
+          <h2>Reminders</h2>
+          <ul id="reminders"></ul>
+        </section>
         <button id="logout" type="button">Sign out</button>
       </section>
 

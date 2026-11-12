@@ -2,7 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { authPlugin } from './auth.ts';
 import { loadConfig, type Config } from './config.ts';
 import { systemClock, type Clock } from './contracts.ts';
+import { chatPlugin } from './chat.ts';
 import { openStorage, type SqliteStorage } from './db.ts';
+import { createOpenAIInterpreter } from './openai.ts';
 import { settingsPlugin } from './settings.ts';
 import { createApp, loggerOptions, type AppDependencies, type FeaturePlugin } from './routes.ts';
 
@@ -30,6 +32,10 @@ export async function startService(env: NodeJS.ProcessEnv, options: StartOptions
   const clock = options.clock ?? systemClock;
   const config = loadConfig(env, options.checkoutRoot !== undefined ? { checkoutRoot: options.checkoutRoot } : {});
   const storage = openStorage(config.dbPath, clock);
+  // An injected interpreter wins (tests); otherwise OpenAI is used only when configured.
+  const modelInterpreter =
+    options.adapters?.modelInterpreter ??
+    (config.chat.enabled ? createOpenAIInterpreter({ apiKey: config.chat.apiKey.reveal(), model: config.chat.model }) : undefined);
   const app = createApp(
     {
       config,
@@ -37,8 +43,9 @@ export async function startService(env: NodeJS.ProcessEnv, options: StartOptions
       clock,
       logger: options.logger ?? loggerOptions('info'),
       ...options.adapters,
+      ...(modelInterpreter !== undefined ? { modelInterpreter } : {}),
     },
-    [authPlugin, settingsPlugin, ...(options.featurePlugins ?? [])],
+    [authPlugin, settingsPlugin, chatPlugin, ...(options.featurePlugins ?? [])],
   );
   try {
     await app.listen({ host: config.host, port: config.port });
