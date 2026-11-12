@@ -56,6 +56,9 @@ async function showOwner(): Promise<void> {
   await loadReminders().catch((e: unknown) => {
     $('confirm-status').textContent = messageOf(e);
   });
+  await refreshPush().catch((e: unknown) => {
+    $('push-state').textContent = messageOf(e);
+  });
   const list = $('timezones');
   if (list.childElementCount === 0 && typeof Intl.supportedValuesOf === 'function') {
     for (const name of Intl.supportedValuesOf('timeZone')) {
@@ -141,6 +144,104 @@ async function loadReminders(): Promise<void> {
     list.append(li);
   }
 }
+interface PushStatus {
+  configured: boolean;
+  publicKey: string | null;
+  notificationsPaused: boolean;
+  subscription: { connected: boolean; ready: boolean; version: number | null };
+}
+
+const pushSupported = (): boolean =>
+  'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+function decodeKey(key: string): Uint8Array<ArrayBuffer> {
+  const raw = atob(key.replace(/-/g, '+').replace(/_/g, '/'));
+  const out = new Uint8Array(new ArrayBuffer(raw.length));
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+async function refreshPush(): Promise<void> {
+  const state = $('push-state');
+  const connect = $<HTMLButtonElement>('push-connect');
+  const test = $<HTMLButtonElement>('push-test');
+  test.hidden = true;
+  const status = await api<PushStatus>('GET', '/api/push');
+  if (!status.configured) {
+    connect.disabled = true;
+    state.textContent = 'Web Push is not configured on the server.';
+    return;
+  }
+  if (!pushSupported()) {
+    connect.disabled = true;
+    state.textContent = 'This browser cannot receive push notifications.';
+    return;
+  }
+  connect.disabled = false;
+  const permission = Notification.permission;
+  const paused = status.notificationsPaused ? ' Notifications are paused.' : '';
+  if (permission === 'denied') {
+    state.textContent = 'Notifications are blocked for this site in the browser settings.';
+  } else if (!status.subscription.connected) {
+    state.textContent = `No browser is connected.${paused}`;
+  } else if (!status.subscription.ready) {
+    state.textContent = `A browser is connected but has not passed a test notification yet.${paused}`;
+    test.hidden = false;
+  } else {
+    state.textContent = `A browser is connected and passed its test.${paused}`;
+    test.hidden = false;
+  }
+}
+
+async function connectBrowser(): Promise<void> {
+  const status = await api<PushStatus>('GET', '/api/push');
+  if (status.publicKey === null) throw { status: 503, message: 'Web Push is not configured on the server.' } satisfies ApiError;
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') throw { status: 0, message: 'Notification permission was not granted.' } satisfies ApiError;
+  const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+  await navigator.serviceWorker.ready;
+  const existing = await registration.pushManager.getSubscription();
+  // A subscription made with another server key cannot be reused.
+  if (existing !== null) await existing.unsubscribe();
+  const subscription = await registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: decodeKey(status.publicKey),
+  });
+  await api('PUT', '/api/push/subscription', subscription.toJSON());
+}
+
+const PUSH_FAILURES: Record<string, string> = {
+  subscription_gone: 'The push service no longer accepts this browser. Connect it again.',
+  rejected: 'The push service rejected the notification.',
+  temporary: 'The push service is temporarily unavailable. Try again shortly.',
+  network: 'The push service could not be reached. Try again shortly.',
+  replaced: 'Another browser was connected meanwhile. Connect this one again.',
+};
+
+$('push-connect').addEventListener('click', async () => {
+  const error = $('push-error');
+  error.textContent = '';
+  try {
+    await connectBrowser();
+    await refreshPush();
+  } catch (e) {
+    error.textContent = messageOf(e);
+    if ((e as ApiError).status === 401) await refresh();
+  }
+});
+
+$('push-test').addEventListener('click', async () => {
+  const error = $('push-error');
+  error.textContent = '';
+  try {
+    const result = await api<{ ok: boolean; code: string | null }>('POST', '/api/push/test');
+    error.textContent = result.ok ? '' : (PUSH_FAILURES[result.code ?? ''] ?? 'The test notification failed.');
+    if (result.ok) $('push-state').textContent = 'Test notification sent. Check that this browser displayed it.';
+    else await refreshPush();
+  } catch (e) {
+    error.textContent = messageOf(e);
+  }
+});
 
 async function refresh(): Promise<void> {
   try {

@@ -19,7 +19,7 @@ await build({
 });
 cpSync(path('migrations'), path('dist/server/migrations'), { recursive: true });
 
-// Web: dist/web. /sw.js is reserved at the root for the later service worker.
+// Web: dist/web. /sw.js (the push service worker) must live at the root.
 mkdirSync(path('dist/web'), { recursive: true });
 await build({
   entryPoints: [path('web/app.ts')],
@@ -28,6 +28,15 @@ await build({
   platform: 'browser',
   target: 'es2023',
   format: 'esm',
+  sourcemap: true,
+});
+await build({
+  entryPoints: [path('web/sw.ts')],
+  outfile: path('dist/web/sw.js'),
+  bundle: true,
+  platform: 'browser',
+  target: 'es2023',
+  format: 'iife',
   sourcemap: true,
 });
 cpSync(path('web/index.html'), path('dist/web/index.html'));
