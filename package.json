@@ -1,0 +1,42 @@
+{
+  "name": "r2",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "node scripts/build.mjs",
+    "hash-password": "node src/hash-password.ts",
+    "start": "node dist/server/main.js",
+    "typecheck": "tsc -p tsconfig.json && tsc -p web/tsconfig.json && tsc -p web/tsconfig.sw.json",
+    "test": "vitest run",
+    "test:browser": "playwright test",
+    "test:factory": "node --test .sandcastle/setup.test.mts"
+  },
+  "devDependencies": {
+    "@ai-hero/sandcastle": "0.14.0",
+    "@playwright/test": "1.65.0",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/jsdom": "30.0.0",
+    "@types/node": "24.19.2",
+    "@types/web-push": "3.6.4",
+    "esbuild": "0.28.2",
+    "jsdom": "31.0.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.1.5",
+    "@fastify/static": "10.1.10",
+    "@js-temporal/polyfill": "0.5.1",
+    "better-sqlite3": "13.1.1",
+    "fastify": "5.12.8",
+    "openai": "7.55.0",
+    "web-push": "4.0.0",
+    "zod": "4.6.7"
+  }
+}

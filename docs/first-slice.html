@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R2 First Slice</title>
+<link rel="stylesheet" href="/home/mark/.pi/agent/skills/html-plan/runtime/htmlplan.css">
+<script src="/home/mark/.pi/agent/skills/html-plan/runtime/htmlplan.js" defer></script>
+<style data-mock-shared>
+.ui{font:14px/1.5 system-ui;color:#192533;background:#fff;border:1px solid #cad3dd;border-radius:12px;padding:18px}.ui h3{margin:0 0 12px}.msg{background:#edf2f7;padding:12px;margin:10px 0;border-radius:8px}.mine{background:#e1efea}.button{display:inline-block;background:#214e42;color:white;padding:8px 12px;border-radius:6px}.muted{color:#526477;font-size:12px}.bad{color:#a32b2b}.row{padding:10px 0;border-bottom:1px solid #ddd}
+</style>
+<body>
+<header>
+<h1>First Reminder Slice in R2</h1>
+<doc-changes new="24"></doc-changes>
+<details class="thread"><summary>Why · 4 requests</summary>
+<doc-quote via="prompt" from="the user">let's create a plan for the first slice of this project now.</doc-quote>
+<doc-quote via="doc" from="PRD.md · Rough delivery plan">Select a channel. Accept one natural-language reminder, save it in SQLite, restart the service, and deliver the notification. Include owner authentication and timezone configuration.</doc-quote>
+<doc-quote via="prompt" from="the user · choices">Private web chat with browser notifications. This needs HTTPS and notification permission.
+TypeScript on Node.js with SQLite. One application and a systemd service.
+OpenAI API. Make the model configurable.</doc-quote>
+<doc-quote via="prompt" from="the user">oh, this will be over Tailscale connected devices. Can you adjust the plan and first-slice HTML doc to match this assumption</doc-quote>
+</details>
+</header>
+<main><doc-plan>
+<doc-claim>
+<p>Only the owner can open the chat and save reminders.</p>
+<doc-mock frame="none" w="440"><template><div class="ui"><h3>R2 · Sign in</h3><div class="msg">Owner password<br>••••••••••••••••</div><span class="button">Sign in</span><p class="muted">One owner. Tailscale devices only. HTTPS required.</p></div></template></doc-mock>
+<doc-claim>
+<p>The server uses one password and revocable sessions.</p>
+<doc-calls title="Owner access · sketch" caption="Each owner request must pass the session and origin tests."><script type="text/plain">
++ **POST /api/login**                          @ src/routes.ts:1
++   **verifyPasswordHash**()                   @ src/auth.ts:1
++   **createSession**()                        @ src/db.ts:1
++ **requireOwner**()                           @ src/auth.ts:1
++   **validateSessionAndOrigin**()             @ src/auth.ts:1
++   **handleOwnerRequest**()                   @ src/routes.ts:1
+</script></doc-calls>
+<doc-note tone="info">Use an HttpOnly, Secure, SameSite=Strict cookie. Reject cross-origin writes. Logout revokes the session.</doc-note>
+<doc-note tone="info">Only the owner's Tailscale devices can reach R2. Tailnet access does not replace the owner password.</doc-note>
+</doc-claim>
+<doc-claim>
+<p>Tailscale Serve gives the owner a private HTTPS address.</p>
+<doc-code title="Tailscale access contract · sketch" lang="ts"><script type="text/plain">
+// Node listens on 127.0.0.1:3000, not on a public interface.
+// Tailscale Serve proxies HTTPS to that loopback address.
+// Use one stable https://<host>.<tailnet>.ts.net origin on all devices.
+// Enable tailnet HTTPS and MagicDNS before browser setup.
+// Restrict port 443 to the owner's devices through tailnet policy.
+// Do not use Tailscale Funnel or expose port 3000.
+// Trust proxy headers only from the loopback proxy.
+// Require the configured HTTPS origin for authenticated writes.
+// Keep the password and session checks on every owner API.
+</script></doc-code>
+</doc-claim>
+<doc-claim>
+<p>The owner sets a timezone and connects one browser.</p>
+<doc-mock frame="none" w="440"><template><div class="ui"><h3>Set up R2</h3><div class="row">Timezone: America/Toronto ▾<br><small>Example only. Select your IANA timezone.</small></div><div class="row">Notifications: not connected</div><p><span class="button">Enable notifications</span></p><p class="muted">Firefox asks for permission after you press the button. Send a test notification before you save a reminder.</p></div></template></doc-mock>
+<doc-note tone="info">Require an explicit timezone. Do not infer it from the server. Require a successful push test before the first reminder. One subscription replaces the previous subscription. Other Tailscale devices can open the chat. This slice sends notifications to one browser only. The server keeps the VAPID keys across restarts.</doc-note>
+</doc-claim>
+</doc-claim>
+
+<doc-claim>
+<p>The owner can save one-off reminders through the chat.</p>
+<doc-mock frame="none" w="440"><template><div class="ui"><h3>R2</h3><div class="msg mine">Remind me to take the bins out tomorrow at 7 pm.</div><div class="msg">Save this reminder?<br><b>Take the bins out</b><br>15 October 2026, 19:00<br>America/Toronto · UTC−04:00<br>One time only</div><span class="button">Save reminder</span><div class="msg">Saved · r_42<br>15 October 2026, 19:00 America/Toronto</div><p class="muted">Example date only. R2 uses the request time.</p></div></template></doc-mock>
+<doc-claim>
+<p>The model proposes a time. Application code validates it.</p>
+<doc-calls title="One request · sketch" caption="The Save button commits a stored proposal, not new model output."><script type="text/plain">
++ **POST /api/chat**                           @ src/routes.ts:1
++   **parseReminder**(text, now, timezone)      @ src/model.ts:1
++   **validateProposal**()                     @ src/reminders.ts:1
++   **saveProposal**()                         @ src/db.ts:1
++ **POST /api/reminders**                      @ src/routes.ts:1
++   **confirmProposal**(proposalId, requestId)  @ src/reminders.ts:1
++   **commitReminder**()                       @ src/db.ts:1
+</script></doc-calls>
+<doc-note tone="info">Use the OpenAI Responses API with a strict JSON Schema. Give the model no tools. Send only the current request, the timezone, and the current time. Keep the API key on the server. Make the model name configurable.</doc-note>
+<doc-claim at="src/reminders.ts:1"><p><b>src/reminders.ts:1</b> · validateProposal()</p>
+<doc-code title="Reminder validation · sketch" lang="ts"><script type="text/plain">
+type Proposal =
+  | { kind: 'clarify'; question: string }
+  | { kind: 'one_off'; text: string; localDateTime: string }
+  | { kind: 'unsupported'; reason: string };
+
+function validateProposal(proposal: Proposal, context: Context) {
+  if (proposal.kind !== 'one_off') return proposal;
+  const times = resolveLocalTime(proposal.localDateTime, context.timezone);
+  if (times.length !== 1) return askForAnotherTime();
+  if (times[0] <= context.now) return askForFutureTime();
+  return makeStoredProposal(proposal.text, times[0], context.timezone);
+}
+</script></doc-code></doc-claim>
+</doc-claim>
+<doc-claim>
+<p>R2 asks for missing times before it offers to save.</p>
+<doc-mock frame="none" w="440"><template><div class="ui"><div class="msg mine">Remind me tomorrow.</div><div class="msg">What time tomorrow, and what should I remind you about?</div><div class="msg mine">Take the bins out tomorrow at 7 pm.</div><p class="muted">Send the complete request in this slice. R2 does not retain the chat.</p></div></template></doc-mock>
+<doc-note tone="info">Reject missing dates, missing times, ambiguous numeric dates, and unsupported recurrence. Reject DST gaps and repeated local times. Ask for a different time. Confirm only after the SQLite transaction commits. A unique request ID prevents duplicate saves.</doc-note>
+</doc-claim>
+<doc-claim>
+<p>A model failure does not save a reminder or loop.</p>
+<doc-code title="Model limits · sketch" lang="ts"><script type="text/plain">
+const limits = {
+  maxInputCharacters: 2000,
+  maxOutputTokens: 500,
+  timeoutMilliseconds: 15000,
+  automaticRetries: 0,
+  requestsPerMinute: 5,
+  requestsPerDay: 100,
+};
+// Keep the daily counter in SQLite across restarts.
+// Use a provider project budget as a second cost limit.
+// Show an error on timeout, invalid output, or quota failure.
+</script></doc-code>
+</doc-claim>
+</doc-claim>
+
+<doc-claim>
+<p>Saved reminders survive restart and send without the model.</p>
+<doc-machine name="delivery" caption="Select a state to see its status in the reminder list."><script type="text/plain">
+machine delivery initial scheduled
+state scheduled # The reminder has a due time.
+state sending # The worker holds a lease.
+state accepted final # The push service accepts the message.
+state retry # A temporary error delays the next attempt.
+state failed final # The worker stops after a permanent error.
+
+| scheduled | sending | accepted |
+| failed | retry | . |
+
+scheduled -due-> sending : due
+sending -ok-> accepted : accepted
+sending -temporary-> retry : temporary
+retry -due-> sending : retry
+sending -permanent-> failed : permanent
+sending -exhausted-> failed : limit
+sending -expired-> retry : lease expired
+</script>
+<div data-state="scheduled"><doc-mock frame="none" w="400"><template><div class="ui">Take the bins out<br><b>Scheduled · 19:00 America/Toronto</b></div></template></doc-mock></div>
+<div data-state="sending"><doc-mock frame="none" w="400"><template><div class="ui">Take the bins out<br><b>Send in progress</b></div></template></doc-mock></div>
+<div data-state="accepted"><doc-mock frame="none" w="400"><template><div class="ui">Take the bins out<br><b>Push service accepted</b><p class="muted">This does not prove that you saw the notification.</p></div></template></doc-mock></div>
+<div data-state="retry"><doc-mock frame="none" w="400"><template><div class="ui">Take the bins out<br><b>Temporary failure · retry at 19:01</b></div></template></doc-mock></div>
+<div data-state="failed"><doc-mock frame="none" w="400"><template><div class="ui">Take the bins out<br><b class="bad">Not sent · browser subscription expired</b><p>Connect the browser again. This reminder stays failed.</p></div></template></doc-mock></div>
+</doc-machine>
+<doc-claim>
+<p>The worker claims due reminders in a SQLite transaction.</p>
+<doc-calls title="No LLM in this path · sketch" caption="The worker uses the saved due time. The push contains no reminder text."><script type="text/plain">
++ **startWorker**(clock)                       @ src/worker.ts:1
++   **recoverExpiredLeases**(now)              @ src/db.ts:1
++   **claimDue**(now)                          @ src/db.ts:1
++   **sendPush**(reminder, subscription)       @ src/push.ts:1
++   **recordAttemptAndOutcome**()              @ src/db.ts:1
++ **push event**                              @ web/sw.ts:1
++   registration.showNotification()            @ web/sw.ts:1
+</script></doc-calls>
+<doc-note tone="info">Run one worker. Poll every five seconds. Claim one reminder per transaction with a lease longer than the push timeout. Record the attempt before the network call. Commit each outcome. Sleep between polls. Retry after 30 seconds, two minutes, and ten minutes. Stop after four total attempts.</doc-note>
+</doc-claim>
+<doc-claim>
+<p>R2 sends all overdue reminders after restart.</p>
+<doc-mock frame="none" w="440"><template><div class="ui"><h3>R2</h3><b>You have an R2 reminder</b><p class="muted">Open R2 through Tailscale. Sign in to read the reminder and its original due time.</p></div></template></doc-mock>
+<doc-ask id="overdue"><p>What must R2 do with overdue one-off reminders?</p>
+<label><input type="radio" name="overdue" value="send" checked> Send all overdue reminders <small>Keep the original due time in the authenticated reminder list.</small></label>
+<label><input type="radio" name="overdue" value="day"> Send only reminders less than 24 hours late <small>Mark older reminders as missed in the list.</small></label>
+</doc-ask>
+<doc-note tone="warn">A crash after provider acceptance can cause another attempt. Use the same notification tag for the same reminder. This reduces duplicate display. It does not give exactly-once delivery.</doc-note>
+</doc-claim>
+<doc-claim>
+<p>The browser can show notifications with the chat tab closed.</p>
+<doc-mock frame="none" w="440"><template><div class="ui"><h3>Notification readiness</h3><div class="row">Private HTTPS through Tailscale: ready</div><div class="row">Permission: allowed</div><div class="row">Browser subscription: connected</div><div class="row">Test notification: received</div><p class="muted">The push service and browser control final delivery. A stopped browser or offline device can delay notifications.</p></div></template></doc-mock>
+<doc-ask id="privacy"><p>What text can appear on the lock screen?</p>
+<label><input type="radio" name="privacy" value="full"> The reminder text and original due time <small>The push payload contains encrypted reminder text.</small></label>
+<label><input type="radio" name="privacy" value="generic" checked> Only “You have an R2 reminder” <small>Open the authenticated app to read the reminder.</small></label>
+</doc-ask>
+<doc-note tone="info">Approved: send all overdue reminders. Show only “You have an R2 reminder” in notifications. Exclude reminder text and due times from push payloads. Notification clicks open R2. Require owner authentication before the app shows reminder details.</doc-note>
+<doc-note tone="warn">Tailscale protects access to R2. Web Push still uses the browser vendor's public push service. OpenAI still receives reminder requests.</doc-note>
+<doc-note tone="info">The server and browser need outbound internet access for Web Push. OpenAI also needs outbound internet access. Opening R2 requires Tailscale access. A push can arrive without access to R2.</doc-note>
+<doc-note tone="warn">Do not promise delivery within 60 seconds on the device. Target push submission within 60 seconds under normal operation. Test real Firefox delivery before release.</doc-note>
+</doc-claim>
+</doc-claim>
+
+<doc-claim>
+<p>The owner can inspect reminders and see service failures.</p>
+<doc-mock frame="none" w="440"><template><div class="ui"><h3>Reminders</h3><div class="row"><b>Take the bins out</b><br>15 October, 19:00 · America/Toronto<br>Scheduled</div><div class="row"><b>Call the dentist</b><br>Push service accepted · 12:00</div><div class="row"><b>Check the oven</b><br><span class="bad">Not sent · subscription expired</span></div><p class="muted">Chat history is not retained. Reminders remain until the owner removes the data file.</p></div></template></doc-mock>
+<doc-claim>
+<p>The service starts without OpenAI and reports delivery health.</p>
+<doc-code title="Service contract · sketch" lang="ts"><script type="text/plain">
+// One Node.js process serves HTML, APIs, and the delivery worker.
+// systemd: unprivileged user, Restart=on-failure, explicit data directory.
+// Tailscale Serve: private HTTPS, same origin, loopback upstream.
+// No cache for authenticated responses; start Serve after host restart.
+// GET /healthz: status only, no reminder text or credentials.
+// GET /api/status: authenticated worker, database, and push readiness.
+// Missing model key: disable chat; keep saved reminder delivery active.
+// SIGTERM: stop claims, finish the active attempt, then close SQLite.
+// Pause flag: stop claims without deleting reminders.
+// Logs: event ID, reminder ID, error code; no text, tokens, or endpoints.
+</script></doc-code>
+</doc-claim>
+<doc-claim>
+<p>Tests prove restart recovery before the owner installs the service.</p>
+<doc-code title="Acceptance tests · sketch" lang="ts"><script type="text/plain">
+// tests/reminders.test.ts: fixed clock, missing time, invalid model JSON,
+// DST gaps/folds, past dates, failed commit, duplicate confirmation.
+// tests/worker.test.ts: reopen a real SQLite file, advance the clock,
+// deliver with the model disabled, retry limits, expired leases.
+// tests/http.test.ts: unauthorized reads/writes, CSRF, session expiry,
+// login limits, model limits, reminder ordering, push endpoint validation.
+// tests/browser.spec.ts: Chromium login, proposal, confirmation, list,
+// mocked PushManager, permission denial, service worker notification.
+// README.md: real Firefox over the Tailscale HTTPS origin, tab closed,
+// restart before due time, disable OpenAI, receive push, inspect outcome.
+// Test a second owner device. Confirm non-tailnet access fails.
+// Confirm tailnet access without an owner session cannot read reminders.
+// Restart the test host. Confirm Serve and R2 resume without public ports.
+// Never count a mocked notification as proof of real push delivery.
+</script></doc-code>
+<doc-note tone="info">Validate subscription URLs before the server sends requests. Require HTTPS. Block local addresses and redirects. Limit request size. Use a reviewed push-service host allowlist. The browser test cannot replace the real push test.</doc-note>
+</doc-claim>
+</doc-claim>
+
+<doc-claim aux="shared">
+<p>SQLite holds the schedule, subscription, sessions, and delivery attempts.</p>
+<doc-schema id="records" lang="ts" title="Shared records · sketch"><script type="text/plain">
+type Reminder = {
+  id: string; requestId: string; text: string;
+  dueAtUtc: string; timezone: string; localDateTime: string;
+  state: 'scheduled' | 'sending' | 'retry' | 'accepted' | 'failed';
+  attempts: number; nextAttemptAt: string; leaseUntil: string | null;
+};
+type DeliveryAttempt = {
+  id: string; reminderId: string; startedAt: string;
+  finishedAt: string | null; outcome: 'started' | 'accepted' | 'failed';
+  errorCode: string | null;
+};
+// SQLite tables also hold owner_settings, push_subscription, sessions,
+// short-lived proposals, and model_usage. No transcript table.
+// Unique requestId; indexed due time; foreign keys; WAL; durable commits.
+// Keep SQLite and VAPID keys outside the checkout with owner-only access.
+</script></doc-schema>
+</doc-claim>
+<doc-claim aux="scope">
+<p>This slice excludes memory, important dates, and recurring reminders.</p>
+<doc-tree caption="All paths start at code/main. Each file is new."><script type="text/plain">
+code/main/
+  + package.json
+  + package-lock.json
+  + tsconfig.json
+  + .gitignore
+  + .env.example
+  + README.md
+  src/
+    + main.ts
+    + config.ts
+    + auth.ts
+    + db.ts
+    + model.ts
+    + reminders.ts
+    + worker.ts
+    + push.ts
+    + routes.ts
+  web/
+    + index.html
+    + app.ts
+    + sw.ts
+  migrations/
+    + 001.sql
+  tests/
+    + reminders.test.ts
+    + worker.test.ts
+    + http.test.ts
+    + browser.spec.ts
+  deploy/
+    + r2.service
+</script></doc-tree>
+<doc-note tone="info">Use Node.js 24, TypeScript, Fastify, better-sqlite3, web-push, and the OpenAI SDK. Use plain HTML and TypeScript for the web UI. Use esbuild, Vitest, and Playwright with Chromium. Pin versions and commit the generated lockfile during implementation.</doc-note>
+<doc-note tone="info">No chat archive, memory store, recurrence, cancellation, edit, snooze, backup automation, or restore tool. Installation instructions cover a Tailscale test host, HTTPS, Serve, and tailnet access rules. Tailscale setup is manual. Multi-browser notification delivery is not part of this slice. Do not connect to or write to production. Start implementation on a feature branch in code/main after plan approval.</doc-note>
+</doc-claim>
+</doc-plan></main>
+</body></html>

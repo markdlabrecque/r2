@@ -1,0 +1,12 @@
+[Unit]
+Description=Factory dispatcher for R2 on spike-1
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Projects/r2/code/main
+Environment="PATH=%h/.config/nvm/versions/node/v24.20.0/bin:%h/.pi/agent/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment=SANDCASTLE_STATE_DIR=%h/.local/state/factory
+ExecStart=%h/Projects/r2/code/main/.sandcastle/factory-dispatch.sh
+# Factory ticket runs are detached and must survive completion of the dispatcher pass.
+KillMode=process
+TimeoutStartSec=infinity
