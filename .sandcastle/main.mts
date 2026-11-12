@@ -1,42 +1,72 @@
 import { createSandbox, claudeCode, pi } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { PARKED, readRuns, setProject, setStage, TERMINAL } from "./board.mts";
+import { randomUUID } from "node:crypto";
+import { adoptClaim, keyFor, PARKED, readRuns, setProject, setStage, stateDir, TERMINAL } from "./board.mts";
+import { readAdmission } from "./admission.mts";
+import { fillReceipt, recordIntent } from "./ownership.mts";
 import { parentText } from "./analyze.mts";
 import { AGENT, allLabels, GRAPH, LABELS, MERGE, SUBTASKS, TRACKER } from "./config.mts";
 import { disallowedModels, piEnvFor, ticketModel } from "./models.mts";
 import { blockedOutcome, expandUnits, SANDCASTLE_MARK, unitHash } from "./graph.mts";
 import type { ImplementerBlocker } from "./graph.mts";
-import { patchManifest } from "./manifests.mts";
+import { patchManifest, readManifest } from "./manifests.mts";
+import { postAndDeliver, prerequisiteHold, runVerifier } from "./handoff.mts";
+import type { Host } from "./handoff.mts";
+import { ownedContainerGone, readAttemptRecord, realClock, realDocker, REPAIR_DEADLINE_MS, REPAIR_MINUTES, runRecoveryAttempt } from "./recovery.mts";
+import { createOwnedSandbox, gitWorkspace, readDotEnv, realProc } from "./recovery-sandbox.mts";
 import * as tracker from "./tracker.mts";
 
 // End-to-end loop for one ticket (run from the repo root):
 //   npx tsx .sandcastle/main.mts --base sal-develop [--issue 695] [--no-push]
 // 1. branch <iid>-<slug> off origin/<base>   2. implementer run   3. verifier run (screenshots/video + verdict)
-// 4. host posts the evidence to the ticket   5. on PASS: push and deliver (tracker adapter):
+// 4. host posts the evidence to the ticket   5. on PASS: push and deliver (tracker adapter).
+//    Steps 3-5 live in handoff.mts, shared with recovery runs so a repaired branch is verified and delivered the same way:
 //    GitLab: wait for the branch pipeline, open an MR into <base>; never merges.
 //    GitHub: open a PR into <base>; with MERGE.auto, merge it once every CI check passes (ci.mts).
 // Never closes the ticket (the dispatcher closes a Task/sub-issue, or moves a ticket on, once its work
 // merges). Every tracker call runs on the host with your glab/gh login; the container has no tracker token.
 // The agent (Claude Code or Pi) comes from AGENT in config.mts. The implementer's model is AGENT.model, or
 // with AGENT.modelLabels the one the ticket's model label names (models.mts); the verifier always uses AGENT.model.
+//
+// Recovery mode (slice four, #60/#74): `main.mts --issue <n> --base <b> --recover <seq> --attempt-record <file>` is
+// started only by Factory's recovery launcher (cli/src/recovery-run.mts) after it claimed the ticket and wrote the
+// host-owned attempt record. Before any Git or container side effect it checks the record, the claimed run record and
+// the arguments name the same project, ticket, branch, base and attempt (seq and UUID), and that the worktree is inside
+// .sandcastle/worktrees/. It then runs recovery.mts runRecoveryAttempt with the real boundaries: recovery-sandbox.mts's
+// owned container (exact pre-recorded name, private Git metadata, this attempt's evidence only writable; not
+// Sandcastle's createSandbox), the repair agent on AGENT.model whatever the ticket's model label, a 900000 ms deadline
+// from container readiness, the shared verifier and delivery (handoff.mts), and a recheck of the ticket's requirements,
+// state, needs-human label, prerequisite holds (handoff.mts prerequisiteHold over the dispatcher's analysis; unknown
+// holds) and claim before verifying and before delivering. SIGTERM/SIGINT cancel the attempt (exit 143). The record
+// ends `done` (delivered) or `stopped` with the reason; the recovery claim in the admission record (admission.mts, #75)
+// is never released here, even with the container's removal unconfirmed: the launcher's settle step releases it once
+// the exact container is confirmed gone. It never creates or deletes a branch, labels the ticket or closes it.
+// Claims and receipts (#75): a dispatched run adopts the launch claim its record carries (board.mts adoptClaim), so its
+// board writes, heartbeat and exit handler are fenced by the claim token, and refuses to start if the claim was
+// superseded. Before Sandcastle creates the branch and worktree it writes the ticket's ownership receipt
+// (ownership.mts) and fills in the branch's commit once they exist. The normal path keeps its branch-exists protection.
 
 // ---- Project config: the block to edit when adapting this to another project ----------
 // Tracker, agent, merge policy, milestone and labels live in config.mts. (Also adapt sandbox/bootstrap-site.sh, the
 // Environment section of prompt.md, and the fixture advice in prompt.verify.md. See ADAPTING.md.)
 const CONFIG = {
-  image: "sandcastle-r2", // factory:image - `factory init --image` replaces the value
+  image: "sandcastle-islandhealth", // factory:image - `factory init --image` replaces the value
   ciWaitMinutes: 30, // give up waiting for CI after this long
   // No CI seen in this time: GitLab opens the MR anyway; with MERGE.auto the PR is not merged.
   noPipelineMinutes: 5,
   // Runs in order inside the container once it is up; the working directory is the worktree.
+  // factory:sandbox-setup:start - `factory init` replaces everything up to the :end tag with an empty list
   sandboxSetup: [
-    { command: "npm ci", timeoutMs: 10 * 60_000 },
-  ] as { command: string; sudo?: boolean; timeoutMs?: number }[],
+    { command: "cd /home/agent/workspace && composer install --no-interaction --prefer-dist", timeoutMs: 20 * 60_000 },
+    { command: "start-web.sh /home/agent/workspace/web", sudo: true },
+    { command: "/opt/sandcastle/bootstrap-site.sh", timeoutMs: 10 * 60_000 },
+  ],
+  // factory:sandbox-setup:end
 };
 const PROJECT = TRACKER.project;
 const IMAGE = CONFIG.image;
@@ -70,6 +100,17 @@ process.on("exit", (code) => {
 function sh(cmd: string, args: string[]): string {
   return execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
 }
+// The host side of the hand-off (handoff.mts): board, git and tracker.
+const host: Host = {
+  setStage, readRuns,
+  live: (r, openMrs) => (!TERMINAL.includes(r.stage) && !PARKED.includes(r.stage)) || (r.stage === "done" && openMrs.has(r.branch!)),
+  git: (args) => sh("git", args),
+  gitStatus: (args) => {
+    const res = spawnSync("git", args, { encoding: "utf8" });
+    return { status: res.status, stdout: res.stdout ?? "" };
+  },
+  tracker,
+};
 
 const { values: opts } = parseArgs({
   options: {
@@ -77,9 +118,16 @@ const { values: opts } = parseArgs({
     issue: { type: "string" },
     "no-push": { type: "boolean", default: false },
     "whole-issues": { type: "boolean", default: false }, // without --issue: pick a ready issue, not one of its Tasks
+    recover: { type: "string" }, // recovery attempt number; started by Factory's recovery launcher only
+    "attempt-record": { type: "string" }, // the launcher's host-owned record of that attempt
   },
 });
 if (!opts.base) fail("--base <integration branch> is required (e.g. sal-develop, or sal-redesign for #565 children)");
+const recovering = opts.recover !== undefined;
+if (recovering) {
+  if (!/^[1-9]\d*$/.test(opts.recover!) || !opts.issue || !opts["attempt-record"]) fail("--recover <attempt> needs a positive attempt number, --issue and --attempt-record.");
+  if (opts["no-push"]) fail("--recover always delivers normally; --no-push is not allowed with it.");
+}
 const base = opts.base;
 if (base !== "spike-1") fail("R2 Factory runs must target spike-1, never main.");
 if (MERGE.auto && (TRACKER as { kind?: string }).kind !== "github" && !opts["no-push"]) fail('MERGE.auto needs TRACKER.kind "github" (config.mts).');
@@ -106,14 +154,104 @@ const withParent = (t: tracker.Ticket): tracker.Ticket => {
 const startTicket = withParent(tracker.ticket(Number(iid)));
 const issue = startTicket;
 const picked = ticketModel(startTicket.labels ?? [], AGENT.modelLabels, AGENT.model);
-if ("error" in picked) fail(`#${iid} ${picked.error}. Not started.`);
-const implementerModel = picked.model;
+if ("error" in picked && !recovering) fail(`#${iid} ${picked.error}. Not started.`);
+const implementerModel = "error" in picked ? AGENT.model : picked.model; // recovery never uses it
 const ticket = [tracker.viewText(Number(iid)), parentText(startTicket)].filter(Boolean).join("\n\n");
 // The version of the ticket this run builds from; compared again before the MR opens.
 const ticketHash = (t = withParent(tracker.ticket(Number(iid)))) => ({ hash: unitHash(t, tracker.notes(Number(iid))), description: t.description });
 const startVersion = ticketHash(startTicket);
 const catalogue = work.tickets.filter((t) => String(t.iid) !== iid);
 const slug = String(issue.title).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40).replace(/-$/, "");
+// ---- recovery mode: one admitted repair attempt (recovery.mts) ------------------------------------------------
+if (recovering) {
+  const seq = Number(opts.recover);
+  const file = resolve(opts["attempt-record"]!);
+  const read = readAttemptRecord(file);
+  if (!read.ok) fail(`#${iid}: recovery refused: ${read.reason}`);
+  const rec = read.record;
+  setProject(PROJECT);
+  const claimed = readRuns().find((r) => r.project === PROJECT && r.iid === iid);
+  const claimOf = () => readAdmission(stateDir()).claims[keyFor(iid!, PROJECT)];
+  const admitted = claimOf();
+  const owned = (() => { try { const r = relative(realpathSync(".sandcastle/worktrees"), realpathSync(rec.worktree)); return !!r && !r.startsWith("..") && !r.includes("/"); } catch { return false; } })();
+  if (rec.iid !== iid || rec.seq !== seq || rec.project !== PROJECT || rec.base !== base || rec.phase !== "claimed"
+    || claimed?.recovery?.attempt !== seq || claimed.recovery.id !== rec.id || claimed.branch !== rec.branch || !owned
+    || admitted?.kind !== "recovery" || admitted.attempt !== rec.id || admitted.token !== claimed.claim) {
+    fail(`#${iid} is not claimed for recovery attempt ${seq} (${rec.id}); only Factory's recovery launcher starts --recover, once per attempt.`);
+  }
+  let token: string | undefined;
+  try {
+    token = adoptClaim(iid);
+  } catch (e) {
+    fail(`#${iid}: recovery refused: ${(e as Error).message}`);
+  }
+  sh("git", ["fetch", "origin", base]);
+  const baseSha = sh("git", ["rev-parse", `origin/${base}`]);
+  currentIid = iid;
+  setStage(iid, { stage: "setup", note: `recovery attempt ${seq}: setting up`, base, starting: undefined });
+  setInterval(() => { if (!finished) setStage(iid!, {}); }, 60_000).unref();
+  console.log(`#${iid} ${issue.title}\n  recovery attempt ${seq} (${rec.id}) on ${rec.branch} at ${rec.startSha.slice(0, 8)}, repair model ${AGENT.model}`);
+  const cancel = new AbortController();
+  for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => cancel.abort(new Error(`${sig}: recovery attempt cancelled`)));
+  mkdirSync(resolve(".sandcastle/sandbox"), { recursive: true });
+  const evidenceBox = `/home/agent/evidence/${iid}`;
+  const recheck = () => {
+    const now = withParent(tracker.ticket(Number(iid)));
+    if (now.state === "closed") return `#${iid} is closed`;
+    if ((now.labels ?? []).includes(LABELS.needsHuman)) return `#${iid} is labelled ${LABELS.needsHuman}`;
+    if (ticketHash(now).hash !== startVersion.hash) return `#${iid}'s requirements changed since the attempt started`;
+    const r = readRuns().find((x) => x.project === PROJECT && x.iid === iid);
+    const c = claimOf();
+    if (r?.recovery?.id !== rec.id || r.claim !== token || c?.token !== token || c.attempt !== rec.id) return `#${iid}'s claim is no longer held by this attempt`;
+    // Dependency and open-PR prerequisite holds, as the dispatcher's analysis records them; unknown holds too.
+    const openMrs = tracker.openMrBranches();
+    const runOf = (b: number) => readRuns().find((x) => x.project === PROJECT && x.iid === String(b));
+    return prerequisiteHold(Number(iid), {
+      manifest: readManifest(PROJECT, Number(iid)), hash: ticketHash(now).hash,
+      satisfied: (b) => {
+        if (tracker.ticket(b).state === "closed") return true;
+        const dep = runOf(b);
+        return !!dep?.branch && tracker.mergedInto(dep.branch, dep.base ?? base);
+      },
+      active: (b) => {
+        const dep = runOf(b);
+        if (dep && !TERMINAL.includes(dep.stage) && !PARKED.includes(dep.stage)) return "a run in flight";
+        return dep?.branch && openMrs.has(dep.branch) ? "an open PR" : undefined;
+      },
+    });
+  };
+  const result = await runRecoveryAttempt({
+    root: process.cwd(), record: file, model: AGENT.model, title: String(issue.title), baseSha, parentIid,
+    promptArgs: {
+      ISSUE_IID: iid, ISSUE_TITLE: String(issue.title), TICKET: ticket, BASE_BRANCH: base, BASE_SHA: baseSha, BRANCH: rec.branch,
+      EVIDENCE_DIR: evidenceBox, CATALOGUE: catalogue.map((t) => `- #${t.iid} ${t.title}`).join("\n") || "(none)",
+      ATTEMPT: String(seq), ATTEMPT_ID: rec.id, REPAIR_MINUTES: String(REPAIR_MINUTES),
+    },
+    previousRun: claimed, logs: [resolve(".sandcastle/logs", `recover-${iid}.log`)],
+    delivery: { ciWaitMinutes: CONFIG.ciWaitMinutes, noCiMinutes: CONFIG.noPipelineMinutes, autoMerge: MERGE.auto },
+    cancel: cancel.signal, deadlineMs: REPAIR_DEADLINE_MS,
+  }, {
+    clock: realClock,
+    createSandbox: (spec) => createOwnedSandbox(spec, {
+      image: IMAGE, setup: CONFIG.sandboxSetup, helpers: resolve(".sandcastle/sandbox"), env: readDotEnv(resolve(".sandcastle/.env")),
+      uid: process.getuid?.() ?? 1000, gid: process.getgid?.() ?? 1000, proc: realProc, root: process.cwd(),
+    }),
+    containerGone: (name) => ownedContainerGone(name, realDocker),
+    workspace: gitWorkspace,
+    recheck, host,
+    setStage: (patch) => setStage(iid!, patch),
+    agent,
+    log: (line) => console.log(line),
+  });
+  finished = true;
+  // The recovery claim stays in the admission record either way; settleRecovery releases it once the container is confirmed gone.
+  if (result.outcome !== "delivered" || result.cleanupPending) {
+    setStage(iid, { stage: "stopped", note: `recovery attempt ${seq} ${result.outcome}${result.cleanupPending ? " (cleanup pending)" : ""}: ${result.reason}` });
+  }
+  console.log(`recovery attempt ${seq}: ${result.outcome}${result.cleanupPending ? " (cleanup pending)" : ""}: ${result.reason}`);
+  process.exit(result.outcome === "delivered" && !result.cleanupPending ? 0 : result.outcome === "interrupted" ? 143 : 1);
+}
+
 const branch = `${iid}-${slug}`;
 
 sh("git", ["fetch", "origin", base]);
@@ -121,12 +259,20 @@ const baseSha = sh("git", ["rev-parse", `origin/${base}`]);
 if (sh("git", ["branch", "--list", branch]) || sh("git", ["ls-remote", "--heads", "origin", branch])) {
   fail(`Branch ${branch} already exists locally or on origin; delete it or pick another ticket.`);
 }
-currentIid = iid;
 setProject(PROJECT);
+// The dispatcher's launch claim (if this run was dispatched): take it over, and fence every later board write with it.
+let claimToken: string | undefined;
+try {
+  claimToken = adoptClaim(iid);
+} catch (e) {
+  fail(`#${iid} not started: ${(e as Error).message}`);
+}
+currentIid = iid;
 setStage(iid, {
   title: String(issue.title), ticketUrl: tracker.ticketUrl(iid), branch, base, stage: "setup", startedAt: new Date().toISOString(), note: "",
   evidenceDir: resolve(".sandcastle/evidence", iid), ticketHash: startVersion.hash, verdict: undefined, mr: undefined,
   parentIid: parentIid === undefined ? undefined : String(parentIid), mergedAt: undefined,
+  starting: undefined, // this run now owns the record the dispatcher reserved at launch
 });
 // Heartbeat so the board can tell a long agent run from a dead process.
 setInterval(() => { if (!finished) setStage(iid!, {}); }, 60_000).unref();
@@ -157,6 +303,12 @@ function readBlocked(): ImplementerBlocker[] | undefined {
   }
 }
 
+// The ownership receipt says what this run is about to create, before Sandcastle creates it (ownership.mts).
+const tracked = TRACKER as { kind?: string; host?: string; gitlabHost?: string; project: string };
+const receipt = recordIntent(stateDir(), {
+  root: process.cwd(), tracker: { kind: tracked.kind ?? "gitlab", host: tracked.host ?? tracked.gitlabHost ?? "", project: PROJECT },
+  ticket: iid, branch, base, runId: claimToken ?? randomUUID(), branchToCreate: true, worktreeToCreate: true,
+});
 const sandbox = await createSandbox({
   branch,
   baseBranch: `origin/${base}`,
@@ -173,6 +325,12 @@ const sandbox = await createSandbox({
     },
   },
 });
+
+try {
+  fillReceipt(receipt, { branchSha: sh("git", ["rev-parse", `refs/heads/${branch}`]), worktreeAt: new Date().toISOString() });
+} catch (e) {
+  console.warn(`Ownership receipt ${receipt} not filled in (${(e as Error).message}); a later repair reconciles it with Git.`);
+}
 
 const promptArgs = {
   ISSUE_IID: iid,
@@ -206,21 +364,9 @@ try {
     // The real diff replaces the predicted footprint for conflict checks from now on.
     patchManifest(PROJECT, Number(iid), { actualFootprint: sh("git", ["diff", "--name-only", `${baseSha}...${tip}`]).split("\n").filter(Boolean) });
 
-    // ---- 2. verifier -------------------------------------------------------------
-    setStage(iid, { stage: "verifying" });
-    const ver = await sandbox.run({
-      agent: agent(AGENT.model),
-      promptFile: "./.sandcastle/prompt.verify.md",
-      promptArgs: { ...promptArgs, TIP_SHA: tip },
-      maxIterations: 1,
-      completionSignal: "<promise>COMPLETE</promise>",
-      name: "verifier",
-    });
-    const after = (await sandbox.exec("git rev-parse HEAD")).stdout.trim();
-    const dirty = (await sandbox.exec("git status --porcelain")).stdout.trim();
-    if (ver.commits.length || after !== tip || dirty) {
-      fail(`Verifier changed the branch (commits=${ver.commits.length}, head=${after.slice(0, 8)}, dirty=${!!dirty}). Not posting or pushing; inspect ${sandbox.worktreePath}.`);
-    }
+    // ---- 2. verifier (handoff.mts) -----------------------------------------------
+    const refused = await runVerifier(sandbox, { setStage }, { iid, evidenceHost, agent: agent(AGENT.model), promptArgs, tip });
+    if (refused) fail(refused);
   }
 } finally {
   await sandbox.close();
@@ -282,74 +428,16 @@ if (endVersion.hash !== startVersion.hash) {
   ].join("\n\n");
   setStage(iid, { note: "built from an older ticket version" });
 }
-const verdictFile = resolve(evidenceHost, "verdict.md");
-if (!existsSync(verdictFile)) fail(`Verifier wrote no verdict.md in ${evidenceHost}. Nothing posted or pushed.`);
-const verdictText = readFileSync(verdictFile, "utf8").trim();
-const verdict = /^VERDICT:\s*(PASS|FAIL|INCONCLUSIVE)/.exec(verdictText)?.[1] ?? "INCONCLUSIVE";
-
-const files = readdirSync(evidenceHost).sort();
-const media = (label: string) => files.filter((f) => (f.startsWith(`${label}-`) && f.endsWith(".png")) || f === `${label}.webm`);
-const shown = [...media("before"), ...media("after")];
-const uploaded = new Map(tracker.uploadEvidence(iid, tip, shown.map((f) => resolve(evidenceHost, f))).map((md, i) => [shown[i], md]));
-const section = (label: string, title: string) => {
-  const items = media(label).map((f) => `**${f}**\n\n${uploaded.get(f)}`);
-  return items.length ? `### ${title}\n\n${items.join("\n\n")}` : "";
-};
-const body = [
-  `## Sandcastle verification: ${verdict}`,
-  `Branch \`${branch}\` @ \`${tip.slice(0, 8)}\` (from \`${base}\` @ \`${baseSha.slice(0, 8)}\`). Synthetic data.`,
-  verdictText.replace(/^VERDICT:.*\n?/, ""),
-  section("before", "Before"),
-  section("after", "After"),
-  SANDCASTLE_MARK,
-].filter(Boolean).join("\n\n");
-tracker.comment(iid, body);
-console.log(`Evidence posted to #${iid} (verdict ${verdict}).`);
-setStage(iid, { verdict });
-
-if (verdict !== "PASS") fail(`Verdict ${verdict}: branch ${branch} kept locally, not pushed. Review the ticket comment.`);
-if (opts["no-push"]) {
-  finished = true;
-  setStage(iid, { stage: "done", note: "--no-push: branch ready locally" });
+// ---- 3-4. post evidence, then on PASS push and deliver (handoff.mts) ----------------
+const outcome = await postAndDeliver({
+  iid, project: PROJECT, branch, base, baseSha, tip, title: String(issue.title), evidenceHost, parentIid, origin: { kind: "implemented" },
+  staleNote, noPush: opts["no-push"], ciWaitMinutes: CONFIG.ciWaitMinutes, noCiMinutes: CONFIG.noPipelineMinutes, autoMerge: MERGE.auto,
+}, host);
+if (!outcome.ok) fail(outcome.reason);
+finished = true;
+if (!outcome.pushed) {
   console.log(`--no-push: stopping. Branch ${branch} is ready locally.`);
   process.exit(0);
 }
-
-// ---- 4. push, then deliver: MR (GitLab), or PR merged once CI passes (GitHub + MERGE.auto) ----
-setStage(iid, { stage: "pushing" });
-sh("git", ["push", "-u", "origin", branch]);
-const sha = sh("git", ["rev-parse", branch]);
-
-// Exact conflicts with the other live Sandcastle branches, so you know which MR to merge first.
-const openMrs = tracker.openMrBranches();
-const conflicts = readRuns()
-  .filter((r) => r.project === PROJECT && r.iid !== iid && r.branch)
-  .filter((r) => (!TERMINAL.includes(r.stage) && !PARKED.includes(r.stage)) || (r.stage === "done" && openMrs.has(r.branch!)))
-  .filter((r) => spawnSync("git", ["rev-parse", "--verify", "--quiet", r.branch!]).status === 0)
-  .flatMap((r) => {
-    const res = spawnSync("git", ["merge-tree", "--write-tree", "--name-only", "--no-messages", branch, r.branch!], { encoding: "utf8" });
-    if (res.status !== 1) return [];
-    const files = [...new Set(res.stdout.trim().split("\n").slice(1).filter(Boolean))];
-    return [`- #${r.iid} (\`${r.branch}\`${r.mr ? `, ${r.mr}` : ""}): ${files.map((f) => `\`${f}\``).join(", ")}`];
-  });
-
-const description = (ciNote: string) => [
-  parentIid === undefined ? `Refs #${iid}` : `Refs #${iid} (Task of #${parentIid})`,
-  `Implemented and verified by Sandcastle. Verdict: **${verdict}** (evidence in the ticket comment).`,
-  ciNote,
-  staleNote,
-  conflicts.length ? `**Conflicts with other open Sandcastle work.** Merge one, then rebase the other:\n\n${conflicts.join("\n")}` : "",
-].filter(Boolean).join("\n\n");
-let delivered: tracker.Delivered;
-try {
-  delivered = await tracker.deliver({
-    branch, base, sha, title: `#${iid}: ${issue.title}`, body: description, onStage: (stage) => setStage(iid!, { stage }),
-    waitMinutes: CONFIG.ciWaitMinutes, noCiMinutes: CONFIG.noPipelineMinutes, autoMerge: MERGE.auto,
-  });
-} catch (e) {
-  fail((e as Error).message);
-}
-finished = true;
-setStage(iid, { stage: "done", mr: delivered.url, note: delivered.merged ? "merged after CI passed" : "" });
 const next = parentIid === undefined ? `moves #${iid} to ${LABELS.done}` : `closes Task #${iid}`;
-console.log(delivered.merged ? `Merged after CI passed. The next dispatcher pass ${next}.` : `Not merged. Once you merge it, the dispatcher ${next}.`);
+console.log(outcome.merged ? `Merged after CI passed. The next dispatcher pass ${next}.` : `Not merged. Once you merge it, the dispatcher ${next}.`);
