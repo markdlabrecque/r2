@@ -88,17 +88,24 @@ export interface Child {
  * Which tickets get runs. With `subtasks`, an issue that has Tasks is only a container: its open
  * Tasks are the units, and once every Task is closed the issue moves to the next stage (`advance`).
  * An issue without Tasks, or any issue when `subtasks` is off, is a unit itself.
+ * Units are unique by ticket id: when a Task is ready itself as well as via its ready parent, the
+ * copy with parent context wins, whatever order they were listed in.
  */
 export function expandUnits(parents: number[], childrenOf: Map<number, Child[]>, subtasks: boolean): { units: { iid: number; parent?: number }[]; advance: number[] } {
-  const units: { iid: number; parent?: number }[] = [];
+  const byIid = new Map<number, { iid: number; parent?: number }>();
+  const add = (u: { iid: number; parent?: number }) => {
+    const seen = byIid.get(u.iid);
+    if (!seen) byIid.set(u.iid, u);
+    else if (seen.parent === undefined && u.parent !== undefined) seen.parent = u.parent;
+  };
   const advance: number[] = [];
   for (const p of parents) {
     const kids = subtasks ? (childrenOf.get(p) ?? []) : [];
-    if (!kids.length) units.push({ iid: p });
+    if (!kids.length) add({ iid: p });
     else if (kids.every((k) => !k.open)) advance.push(p);
-    else for (const k of kids) if (k.open) units.push({ iid: k.iid, parent: p });
+    else for (const k of kids) if (k.open) add({ iid: k.iid, parent: p });
   }
-  return { units, advance };
+  return { units: [...byIid.values()], advance };
 }
 
 // ---- footprints ----------------------------------------------------------------

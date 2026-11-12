@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { analyse, analysisWorktree } from "./analyze.mts";
-import { PARKED, readRuns, removeRun, setProject, setStage, TERMINAL } from "./board.mts";
+import { claimRun, PARKED, readRuns, removeRun, reserveRun, setProject, setStage, TERMINAL } from "./board.mts";
 import type { BoardRun } from "./board.mts";
 import { AGENT, allLabels, GRAPH, LABELS, SUBTASKS, TRACKER } from "./config.mts";
 import { disallowedModels, ticketModel } from "./models.mts";
@@ -22,6 +22,13 @@ import type { Ticket } from "./tracker.mts";
 // base or closed, and its files don't overlap a live run (in flight, or MR still open).
 // Tickets that aren't free get a "queued" card on the board saying why. A ticket whose run failed
 // is not retried every pass: delete its file in the state dir to retry it.
+// Each launch is recorded on the board (stage "setup", note "starting", the child's pid) the moment it is spawned,
+// so the cap counts it in every later pass, this project's or another's, before main.mts writes its own record.
+// Before spawning, each launch is claimed atomically (claimRun in board.mts): the cap is recounted from the board and
+// the ticket checked under a shared lock, so a pass running alongside (another project's, a manual one, or a recovery
+// attempt) cannot overfill the cap or start the same ticket twice. A refused claim launches nothing. Claims live in the
+// admission record (admission.mts, #75): each launch's claim is handed to its child, every normal admission advances the
+// project's activity generation, and a project held by a recovery attempt admits nothing.
 // With SUBTASKS.enabled (config.mts), a ready issue that has Tasks gets one run per open Task instead.
 // Each pass also finishes merged work: a Task whose branch merged into the base is closed, a whole
 // ticket moves to LABELS.done, and a parent moves to LABELS.done once all its Tasks are closed.
@@ -129,7 +136,8 @@ for (const p of advance) {
 const workById = new Map(work.tickets.map((t) => [t.iid, t]));
 const parentById = new Map(parents.map((p) => [p.iid, p]));
 const issues = units
-  .map((u) => (u.parent ? workById.get(u.iid) : parentById.get(u.iid)))
+  // The catalogue copy is canonical: it carries parent context, so analysis, hashing and dispatch agree.
+  .map((u) => workById.get(u.iid) ?? parentById.get(u.iid))
   .filter((t): t is Ticket => !!t && !t.labels?.some((l) => LABELS.exclude.includes(l)));
 
 sh("git", ["fetch", "origin", "--prune"]);
@@ -263,6 +271,14 @@ const logDir = resolve(here, "logs");
 mkdirSync(logDir, { recursive: true });
 for (const [n, d] of launch.entries()) {
   const iid = String(d.iid);
+  const meta = { title: byIid.get(d.iid)!.title, ticketUrl: tracker.ticketUrl(d.iid), base };
+  // Held by this pass's pid until the child is spawned; if this pass dies first, readers drop the unstarted claim.
+  const claim = claimRun({ iid, pid: process.pid, cap, patch: meta });
+  if (!claim.ok) {
+    log(`#${iid} not launched: ${claim.reason}`);
+    if (claim.reason.startsWith("no capacity")) break;
+    continue;
+  }
   const out = openSync(resolve(logDir, `run-${iid}.log`), "a");
   const child = spawn(existsSync(npx) ? npx : "npx", ["tsx", resolve(here, "main.mts"), "--base", base, "--issue", iid, ...(opts["whole-issues"] ? ["--whole-issues"] : [])], {
     cwd: process.cwd(),
@@ -271,5 +287,8 @@ for (const [n, d] of launch.entries()) {
     env: process.env,
   });
   child.unref();
+  // The claim goes to the child (main.mts adopts it); a launch that failed to spawn releases it.
+  if (child.pid) reserveRun(iid, child.pid, { ...meta, claim: claim.run.claim });
+  else removeRun(iid, claim.run.claim);
   if (n < launch.length - 1) await new Promise((r) => setTimeout(r, SELECT.staggerSeconds * 1000));
 }
