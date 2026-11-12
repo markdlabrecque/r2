@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "build": "node scripts/build.mjs",
+    "hash-password": "node src/hash-password.ts",
     "start": "node dist/server/main.js",
     "typecheck": "tsc -p tsconfig.json && tsc -p web/tsconfig.json",
     "test": "vitest run",

@@ -350,7 +350,7 @@ describe('built service', () => {
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain('<script type="module" src="/app.js">');
-    expect(html).toMatch(/not yet implemented/i);
+    expect(html).toContain('id="login"');
     expect((await fetch(`http://127.0.0.1:${port}/app.js`)).status).toBe(200);
     expect((await fetch(`http://127.0.0.1:${port}/sw.js`)).status).toBe(404);
     expect(await first.stop()).toBe(0);
