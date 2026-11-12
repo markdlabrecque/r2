@@ -3,6 +3,8 @@ import { authPlugin } from './auth.ts';
 import { loadConfig, type Config } from './config.ts';
 import { systemClock, type Clock } from './contracts.ts';
 import { openStorage, type SqliteStorage } from './db.ts';
+import { pushPlugin } from './push-routes.ts';
+import { WebPushTransport } from './push.ts';
 import { settingsPlugin } from './settings.ts';
 import { createApp, loggerOptions, type AppDependencies, type FeaturePlugin } from './routes.ts';
 
@@ -30,6 +32,13 @@ export async function startService(env: NodeJS.ProcessEnv, options: StartOptions
   const clock = options.clock ?? systemClock;
   const config = loadConfig(env, options.checkoutRoot !== undefined ? { checkoutRoot: options.checkoutRoot } : {});
   const storage = openStorage(config.dbPath, clock);
+  const pushTransport =
+    options.adapters?.pushTransport ??
+    (config.push.enabled
+      ? new WebPushTransport({
+          vapid: { subject: config.push.subject, publicKey: config.push.publicKey, privateKey: config.push.privateKey.reveal() },
+        })
+      : undefined);
   const app = createApp(
     {
       config,
@@ -37,8 +46,9 @@ export async function startService(env: NodeJS.ProcessEnv, options: StartOptions
       clock,
       logger: options.logger ?? loggerOptions('info'),
       ...options.adapters,
+      ...(pushTransport !== undefined ? { pushTransport } : {}),
     },
-    [authPlugin, settingsPlugin, ...(options.featurePlugins ?? [])],
+    [authPlugin, settingsPlugin, pushPlugin, ...(options.featurePlugins ?? [])],
   );
   try {
     await app.listen({ host: config.host, port: config.port });

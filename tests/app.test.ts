@@ -126,7 +126,7 @@ describe('security headers and errors', () => {
     expect(typed.json().error.code).toBe('request_id_conflict');
   });
 
-  it('serves nothing from /sw.js until the worker task ships it', async () => {
+  it('serves no app shell for /sw.js when web assets are absent', async () => {
     const { app } = build();
     expect((await app.inject('/sw.js')).statusCode).toBe(404);
   });
@@ -352,7 +352,9 @@ describe('built service', () => {
     expect(html).toContain('<script type="module" src="/app.js">');
     expect(html).toContain('id="login"');
     expect((await fetch(`http://127.0.0.1:${port}/app.js`)).status).toBe(200);
-    expect((await fetch(`http://127.0.0.1:${port}/sw.js`)).status).toBe(404);
+    const sw = await fetch(`http://127.0.0.1:${port}/sw.js`);
+    expect(sw.status).toBe(200);
+    expect(await sw.text()).toContain('You have an R2 reminder');
     expect(await first.stop()).toBe(0);
 
     // Write a record directly with a separate connection while the service is stopped.

@@ -89,6 +89,10 @@ The packaging task will add the systemd unit, example application configuration,
 
 Pending implementation. No real reminder delivery or host installation is claimed by the Factory setup.
 
+### Browser notifications
+
+The owner connects one browser from the web app (Notifications section). The browser asks permission, registers `/sw.js`, subscribes with the server's VAPID public key, and R2 stores the subscription (a new one replaces the old). A test notification must be accepted by the push service before the browser is marked ready. Notifications show only "You have an R2 reminder"; the push payload carries only an opaque id. R2 contacts only reviewed push hosts (FCM, Mozilla, Apple, Windows), over HTTPS, and refuses private, loopback and tailnet addresses. Push acceptance is not proof the owner saw the notification. Automated tests use a fake push transport; real Firefox delivery needs owner-run evidence.
+
 ### Owner password
 
 Create the value for `R2_PASSWORD_HASH` with `npm run hash-password`. It reads the password without echo (or from piped stdin), never from an argument, and prints a scrypt PHC hash. Without it, the service starts but owner sign-in reports that it is not configured. Every `/api/` route except those marked `config: { public: true }` requires the owner session cookie, and writes must come from `R2_ORIGIN`.

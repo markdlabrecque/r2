@@ -28,6 +28,14 @@
           <button type="submit">Save timezone</button>
           <p id="settings-status" role="status" aria-live="polite"></p>
         </form>
+        <section id="notifications" aria-labelledby="notifications-heading">
+          <h2 id="notifications-heading">Notifications</h2>
+          <p id="push-state" role="status" aria-live="polite">Checking this browser…</p>
+          <p>Notifications only say “You have an R2 reminder”. Open R2 to read it. Connecting this browser replaces the previous one.</p>
+          <button id="push-connect" type="button">Connect this browser</button>
+          <button id="push-test" type="button" hidden>Send a test notification</button>
+          <p id="push-error" role="alert"></p>
+        </section>
         <button id="logout" type="button">Sign out</button>
       </section>
 
