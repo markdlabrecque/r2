@@ -1,0 +1,5 @@
+.env
+evidence/
+state/
+logs/
+board.html

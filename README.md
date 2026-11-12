@@ -1,0 +1,51 @@
+# R2
+
+A personal reminder agent for one owner. The first slice uses private web chat through Tailscale and generic browser notifications.
+
+- [Product requirements](PRD.md)
+- [Approved first-slice plan](docs/first-slice.packed.html)
+- [Slice #1 and its task issues](https://github.com/markdlabrecque/r2/issues/1)
+
+## Factory
+
+`spike-1` is the integration branch. Factory runs the task sub-issues with Sonnet and verifies them with Opus. A PASS verdict and passing CI on the exact pushed commit are required before Factory squash-merges the task PR into `spike-1`. No task merges into `main`.
+
+The project is registered with the local Factory board at <http://127.0.0.1:4444>. The personal profile lives in `.sandcastle/config.mts`. Both dispatcher entrypoints refuse any base other than `spike-1`.
+
+```sh
+# Node.js 24
+npm ci
+npm run test:factory
+npx sandcastle docker build-image --image-name sandcastle-r2
+factory dispatch --dry-run
+factory dispatch
+factory status
+```
+
+Factory passes are manual for now. `factory dispatch` performs one pass; it does not install a scheduler. Subsequent passes reconcile merged work and start newly unblocked tasks. The board can show other projects too.
+
+### Agent credential
+
+The host already needs a Claude login and the `pi-claude-subscription` extension. The container also requires a separate Claude token:
+
+1. Run `claude setup-token` yourself in a terminal.
+2. Store its result as `CLAUDE_CODE_OAUTH_TOKEN` in `.sandcastle/.env`, mode 0600.
+3. Run `factory dispatch --dry-run`. This validates the token without printing it.
+
+Do not put the token in GitHub, the Docker image, screenshots, shell arguments, or chat. `.sandcastle/.env` is ignored. No application OpenAI or VAPID credentials are needed for synthetic tests.
+
+### Checks
+
+CI runs on every PR. The initial automation scaffold runs `npm run test:factory`. Once `src/main.ts` exists, CI also requires `typecheck`, `build`, and `test`. Once `playwright.config.ts` exists, CI installs Chromium and requires `test:browser`. These checks are not optional when their files exist.
+
+The image contains Playwright 1.65.0 and Chromium. Application tasks must retain that version for browser compatibility and preserve the automation dependencies and scripts when extending `package.json`.
+
+Real Firefox notifications, Tailscale isolation, and host restart need owner-run evidence on a non-production host. Mocked browser tests do not satisfy those gates. The final task and parent remain incomplete until that evidence exists.
+
+## Private installation
+
+The packaging task will add the systemd unit, example application configuration, and owner-run Tailscale setup. R2 will bind to loopback behind Tailscale Serve with HTTPS. Tailnet access does not replace the owner login. No Funnel or public listener is in scope.
+
+## Acceptance evidence
+
+Pending implementation. No real reminder delivery or host installation is claimed by the Factory setup.
