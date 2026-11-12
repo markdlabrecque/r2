@@ -7,9 +7,30 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main id="app" aria-live="polite">
+    <main id="app">
       <h1>R2</h1>
-      <p id="status" role="status">Setup is not yet implemented. Sign-in and reminders are not available.</p>
+      <p id="status" role="status" aria-live="polite">Checking the service…</p>
+
+      <form id="login" hidden>
+        <h2>Sign in</h2>
+        <label for="password">Owner password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="1024" />
+        <button type="submit">Sign in</button>
+        <p id="login-error" role="alert"></p>
+      </form>
+
+      <section id="owner" hidden>
+        <form id="settings">
+          <h2>Settings</h2>
+          <label for="timezone">Timezone (IANA name, for example America/Toronto)</label>
+          <input id="timezone" name="timezone" type="text" list="timezones" autocomplete="off" spellcheck="false" required maxlength="64" />
+          <datalist id="timezones"></datalist>
+          <button type="submit">Save timezone</button>
+          <p id="settings-status" role="status" aria-live="polite"></p>
+        </form>
+        <button id="logout" type="button">Sign out</button>
+      </section>
+
       <noscript><p>This page needs JavaScript.</p></noscript>
     </main>
     <script type="module" src="/app.js"></script>

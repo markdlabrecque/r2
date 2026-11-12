@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyServerOptions } from 'fastify';
+import { installApiAccessControl } from './auth.ts';
 import type { Config } from './config.ts';
 import {
   R2Error,
@@ -132,6 +133,9 @@ export function createApp(deps: AppDependencies, featurePlugins: readonly Featur
       return reply.code(503).send({ status: 'unavailable' });
     }
   });
+
+  // Before any feature registers: every `/api/` route is owner-only unless it opts out.
+  installApiAccessControl(app, deps);
 
   for (const plugin of featurePlugins) {
     app.register(async (scope) => {

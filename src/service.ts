@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
+import { authPlugin } from './auth.ts';
 import { loadConfig, type Config } from './config.ts';
 import { systemClock, type Clock } from './contracts.ts';
 import { openStorage, type SqliteStorage } from './db.ts';
+import { settingsPlugin } from './settings.ts';
 import { createApp, loggerOptions, type AppDependencies, type FeaturePlugin } from './routes.ts';
 
 export interface RunningService {
@@ -36,7 +38,7 @@ export async function startService(env: NodeJS.ProcessEnv, options: StartOptions
       logger: options.logger ?? loggerOptions('info'),
       ...options.adapters,
     },
-    options.featurePlugins ?? [],
+    [authPlugin, settingsPlugin, ...(options.featurePlugins ?? [])],
   );
   try {
     await app.listen({ host: config.host, port: config.port });

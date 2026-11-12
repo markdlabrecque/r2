@@ -88,3 +88,7 @@ The packaging task will add the systemd unit, example application configuration,
 ## Acceptance evidence
 
 Pending implementation. No real reminder delivery or host installation is claimed by the Factory setup.
+
+### Owner password
+
+Create the value for `R2_PASSWORD_HASH` with `npm run hash-password`. It reads the password without echo (or from piped stdin), never from an argument, and prints a scrypt PHC hash. Without it, the service starts but owner sign-in reports that it is not configured. Every `/api/` route except those marked `config: { public: true }` requires the owner session cookie, and writes must come from `R2_ORIGIN`.
