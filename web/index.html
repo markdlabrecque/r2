@@ -46,6 +46,7 @@
         </section>
         <section id="reminders-section">
           <h2>Reminders</h2>
+          <button id="reminders-refresh" type="button">Refresh</button>
           <ul id="reminders"></ul>
         </section>
         <section id="notifications" aria-labelledby="notifications-heading">
@@ -55,6 +56,8 @@
           <button id="push-connect" type="button">Connect this browser</button>
           <button id="push-test" type="button" hidden>Send a test notification</button>
           <p id="push-error" role="alert"></p>
+          <p id="service-state" role="status" aria-live="polite"></p>
+          <button id="pause-toggle" type="button">Pause notifications</button>
         </section>
         <button id="logout" type="button">Sign out</button>
       </section>

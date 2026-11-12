@@ -59,6 +59,7 @@ async function showOwner(): Promise<void> {
   await refreshPush().catch((e: unknown) => {
     $('push-state').textContent = messageOf(e);
   });
+  await refreshStatus().catch(() => undefined);
   const list = $('timezones');
   if (list.childElementCount === 0 && typeof Intl.supportedValuesOf === 'function') {
     for (const name of Intl.supportedValuesOf('timeZone')) {
@@ -192,6 +193,55 @@ async function refreshPush(): Promise<void> {
     test.hidden = false;
   }
 }
+
+interface ServiceStatus {
+  worker: { state: string };
+  notifications: { paused: boolean; pausedByConfig: boolean; pushConfigured: boolean };
+  reminders: { byState: Record<string, number>; due: number };
+}
+
+async function refreshStatus(): Promise<void> {
+  const s = await api<ServiceStatus>('GET', '/api/status');
+  const toggle = $<HTMLButtonElement>('pause-toggle');
+  toggle.textContent = s.notifications.paused ? 'Resume notifications' : 'Pause notifications';
+  toggle.disabled = s.notifications.pausedByConfig;
+  const parts = [
+    s.worker.state === 'failed' ? 'The delivery worker has failed.' : 'Delivery worker running.',
+    s.notifications.paused
+      ? s.notifications.pausedByConfig
+        ? 'Notifications are paused by server configuration.'
+        : 'Notifications are paused. Reminders stay saved and send, overdue, after you resume.'
+      : '',
+    `Waiting to send: ${s.reminders.due}. Not sent: ${s.reminders.byState['failed'] ?? 0}.`,
+  ];
+  $('service-state').textContent = parts.filter((p) => p !== '').join(' ');
+}
+
+$('pause-toggle').addEventListener('click', async () => {
+  const error = $('push-error');
+  error.textContent = '';
+  try {
+    const s = await api<ServiceStatus>('GET', '/api/status');
+    await api('PUT', '/api/notifications/pause', { paused: !s.notifications.paused });
+    await refreshStatus();
+  } catch (e) {
+    error.textContent = messageOf(e);
+  }
+});
+
+$('reminders-refresh').addEventListener('click', () => {
+  void loadReminders().catch((e: unknown) => {
+    $('confirm-status').textContent = messageOf(e);
+  });
+  void refreshStatus().catch(() => undefined);
+});
+
+// Keep the list and delivery state current while the tab is open; delivery itself never needs the tab.
+setInterval(() => {
+  if ($('owner').hidden) return;
+  void loadReminders().catch(() => undefined);
+  void refreshStatus().catch(() => undefined);
+}, 15_000);
 
 async function connectBrowser(): Promise<void> {
   const status = await api<PushStatus>('GET', '/api/push');
