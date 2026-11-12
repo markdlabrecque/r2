@@ -11,7 +11,7 @@
     "build": "node scripts/build.mjs",
     "hash-password": "node src/hash-password.ts",
     "start": "node dist/server/main.js",
-    "typecheck": "tsc -p tsconfig.json && tsc -p web/tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p web/tsconfig.json && tsc -p web/tsconfig.sw.json",
     "test": "vitest run",
     "test:browser": "playwright test",
     "test:factory": "node --test .sandcastle/setup.test.mts"

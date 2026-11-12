@@ -5,6 +5,8 @@ import { systemClock, type Clock } from './contracts.ts';
 import { chatPlugin } from './chat.ts';
 import { openStorage, type SqliteStorage } from './db.ts';
 import { createOpenAIInterpreter } from './openai.ts';
+import { pushPlugin } from './push-routes.ts';
+import { WebPushTransport } from './push.ts';
 import { settingsPlugin } from './settings.ts';
 import { createApp, loggerOptions, type AppDependencies, type FeaturePlugin } from './routes.ts';
 
@@ -36,6 +38,13 @@ export async function startService(env: NodeJS.ProcessEnv, options: StartOptions
   const modelInterpreter =
     options.adapters?.modelInterpreter ??
     (config.chat.enabled ? createOpenAIInterpreter({ apiKey: config.chat.apiKey.reveal(), model: config.chat.model }) : undefined);
+  const pushTransport =
+    options.adapters?.pushTransport ??
+    (config.push.enabled
+      ? new WebPushTransport({
+          vapid: { subject: config.push.subject, publicKey: config.push.publicKey, privateKey: config.push.privateKey.reveal() },
+        })
+      : undefined);
   const app = createApp(
     {
       config,
@@ -44,8 +53,9 @@ export async function startService(env: NodeJS.ProcessEnv, options: StartOptions
       logger: options.logger ?? loggerOptions('info'),
       ...options.adapters,
       ...(modelInterpreter !== undefined ? { modelInterpreter } : {}),
+      ...(pushTransport !== undefined ? { pushTransport } : {}),
     },
-    [authPlugin, settingsPlugin, chatPlugin, ...(options.featurePlugins ?? [])],
+    [authPlugin, settingsPlugin, pushPlugin, chatPlugin, ...(options.featurePlugins ?? [])],
   );
   try {
     await app.listen({ host: config.host, port: config.port });

@@ -58,7 +58,7 @@ docker run --rm \
   --entrypoint node sandcastle-r2 /tmp/image-results.mjs
 ```
 
-Real Firefox notifications, Tailscale isolation, and host restart need owner-run evidence on a non-production host. Mocked browser tests do not satisfy those gates. The final task and parent remain incomplete until that evidence exists.
+The owner confirmed real test-notification delivery in Chromium and Zen Browser on Omarchy on 2026-11-12, accepting Chromium for the browser-delivery gate. See [browser push delivery verification](docs/push-delivery-verification.md). Stock Firefox, closed-tab delivery, Tailscale isolation, and host restart remain unverified. Mocked browser tests do not satisfy real-delivery gates, and these results do not complete the final task or parent.
 
 ## Local development
 
@@ -87,7 +87,11 @@ The packaging task will add the systemd unit, example application configuration,
 
 ## Acceptance evidence
 
-Pending implementation. No real reminder delivery or host installation is claimed by the Factory setup.
+The owner confirmed real generic test-notification delivery in Chromium and Zen Browser on the non-production Omarchy host. See [the verification record](docs/push-delivery-verification.md) for setup, fixes, and evidence limits. Scheduled reminder delivery and a persistent host installation are not claimed.
+
+### Browser notifications
+
+The owner connects one browser from the web app (Notifications section). The browser asks permission, registers `/sw.js`, subscribes with the server's VAPID public key, and R2 stores the subscription (a new one replaces the old). A test notification must be accepted by the push service before the browser is marked ready. Notifications show the generic title "You have an R2 reminder" and body "Open R2 and sign in to read it."; the push payload carries only an opaque id, never reminder text or due times. R2 contacts only reviewed push hosts (FCM, Mozilla, Apple, Windows), over HTTPS, and refuses private, loopback and tailnet addresses. Push acceptance is not proof the owner saw the notification. Automated tests use a fake push transport. The owner separately confirmed real delivery in Chromium and Zen Browser; stock Firefox has not been tested. Chromium delivery satisfies the owner's browser-delivery acceptance criterion.
 
 ### Owner password
 
