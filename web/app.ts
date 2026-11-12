@@ -1,4 +1,4 @@
-// Web shell: owner sign-in, explicit timezone and sign-out. Chat and notifications arrive in later tasks.
+// Web shell: owner sign-in, explicit timezone, chat with explicit confirmation, reminder list, sign-out.
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
   if (el === null) throw new Error(`Missing element #${id}`);
@@ -53,6 +53,9 @@ async function showOwner(): Promise<void> {
   $<HTMLInputElement>('timezone').value = settings.timezone ?? '';
   $('status').textContent =
     settings.timezone === null ? 'Choose your timezone before creating reminders.' : `Signed in. Timezone: ${settings.timezone}.`;
+  await loadReminders().catch((e: unknown) => {
+    $('confirm-status').textContent = messageOf(e);
+  });
   const list = $('timezones');
   if (list.childElementCount === 0 && typeof Intl.supportedValuesOf === 'function') {
     for (const name of Intl.supportedValuesOf('timeZone')) {
@@ -60,6 +63,82 @@ async function showOwner(): Promise<void> {
       option.value = name;
       list.append(option);
     }
+  }
+}
+
+interface Proposal {
+  id: string;
+  text: string;
+  dueAt: string;
+  timezone: string;
+  localDateTime: string;
+}
+
+interface ChatReply {
+  type: 'clarify' | 'unsupported' | 'proposal';
+  message: string;
+  proposal?: Proposal;
+  utcOffset?: string;
+}
+
+interface ReminderItem {
+  id: string;
+  text: string;
+  dueAt: string;
+  timezone: string;
+  localDateTime: string;
+  state: string;
+  attempts: number;
+  acceptedAt: string | null;
+  errorCode: string | null;
+  deliveryAttempts: { attemptNumber: number; outcome: string; errorCode: string | null }[];
+}
+
+let pending: { proposal: Proposal; requestId: string } | undefined;
+
+const newRequestId = (): string => crypto.randomUUID();
+
+function showProposal(proposal: Proposal | undefined, utcOffset = ''): void {
+  $('proposal').hidden = proposal === undefined;
+  if (proposal === undefined) {
+    pending = undefined;
+    return;
+  }
+  // One request id per proposal: a retried confirmation cannot create a second reminder.
+  pending = { proposal, requestId: newRequestId() };
+  $('proposal-text').textContent = proposal.text;
+  $('proposal-when').textContent = `${proposal.localDateTime.replace('T', ' ')} ${proposal.timezone}${utcOffset === '' ? '' : ` (UTC${utcOffset})`} · one time only`;
+}
+
+const STATE_LABELS: Record<string, string> = {
+  scheduled: 'Scheduled',
+  sending: 'Sending',
+  retry: 'Retrying',
+  accepted: 'Push service accepted (does not prove you saw it)',
+  failed: 'Not sent',
+};
+
+async function loadReminders(): Promise<void> {
+  const { reminders } = await api<{ reminders: ReminderItem[] }>('GET', '/api/reminders');
+  const list = $('reminders');
+  list.replaceChildren();
+  if (reminders.length === 0) {
+    const li = document.createElement('li');
+    li.textContent = 'No reminders yet.';
+    list.append(li);
+  }
+  for (const r of reminders) {
+    const li = document.createElement('li');
+    const outcome = r.deliveryAttempts.at(-1)?.outcome;
+    const parts = [
+      r.text,
+      `due ${r.localDateTime.replace('T', ' ')} ${r.timezone}`,
+      STATE_LABELS[r.state] ?? r.state,
+      ...(r.errorCode === null ? [] : [`reason: ${r.errorCode}`]),
+      ...(outcome === undefined ? [] : [`attempts: ${r.attempts}, last outcome: ${outcome}`]),
+    ];
+    li.textContent = parts.join(' · ');
+    list.append(li);
   }
 }
 
@@ -101,6 +180,46 @@ $('settings').addEventListener('submit', async (event) => {
     status.textContent = messageOf(e);
     if ((e as ApiError).status === 401) await refresh();
   }
+});
+
+$('chat').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const input = $<HTMLInputElement>('message');
+  const reply = $('reply');
+  $('confirm-status').textContent = '';
+  showProposal(undefined);
+  reply.textContent = 'Thinking…';
+  try {
+    const result = await api<ChatReply>('POST', '/api/chat', { message: input.value });
+    reply.textContent = result.message;
+    if (result.type === 'proposal') showProposal(result.proposal, result.utcOffset);
+    input.value = '';
+  } catch (e) {
+    reply.textContent = messageOf(e);
+    if ((e as ApiError).status === 401) await refresh();
+  }
+});
+
+$('confirm').addEventListener('click', async () => {
+  if (pending === undefined) return;
+  const status = $('confirm-status');
+  status.textContent = 'Saving…';
+  try {
+    await api('POST', '/api/reminders/confirm', { proposalId: pending.proposal.id, requestId: pending.requestId });
+    showProposal(undefined);
+    $('reply').textContent = '';
+    status.textContent = 'Saved. The reminder is stored and will be sent when due.';
+    await loadReminders();
+  } catch (e) {
+    // Keep the proposal and request id so Save can be pressed again safely.
+    status.textContent = `${messageOf(e)} Nothing is confirmed until this says Saved.`;
+  }
+});
+
+$('discard').addEventListener('click', () => {
+  showProposal(undefined);
+  $('reply').textContent = '';
+  $('confirm-status').textContent = 'Discarded. Nothing was saved.';
 });
 
 $('logout').addEventListener('click', async () => {
