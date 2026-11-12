@@ -5,6 +5,8 @@ import type { FeaturePlugin } from './routes.ts';
 
 const subscriptionBody = z.strictObject({
   endpoint: z.string().min(1).max(2048),
+  // PushSubscription.toJSON() includes this browser metadata; it is not stored.
+  expirationTime: z.number().nullable().optional(),
   keys: z.strictObject({ p256dh: z.string().min(1).max(256), auth: z.string().min(1).max(256) }),
 });
 

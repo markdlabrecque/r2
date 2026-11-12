@@ -22,7 +22,8 @@ const REMINDER_ID = /^[A-Za-z0-9_-]{1,64}$/;
  * Reviewed push-service hosts: Chrome/Edge-on-FCM, Firefox, Safari and Windows Notification
  * Service. An endpoint is data from the browser, so R2 only ever contacts these.
  */
-const EXACT_HOSTS: readonly string[] = ['fcm.googleapis.com', 'web.push.apple.com'];
+// jmt17.google.com was returned by Chromium during the owner's delivery check.
+const EXACT_HOSTS: readonly string[] = ['fcm.googleapis.com', 'jmt17.google.com', 'web.push.apple.com'];
 const HOST_SUFFIXES: readonly string[] = ['.push.services.mozilla.com', '.push.apple.com', '.notify.windows.com'];
 
 export function isAllowedPushHost(hostname: string): boolean {

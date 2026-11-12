@@ -35,6 +35,7 @@ describe('endpoint validation', () => {
     for (const ok of [
       ENDPOINT,
       'https://fcm.googleapis.com/fcm/send/abc',
+      'https://jmt17.google.com/synthetic-token',
       'https://web.push.apple.com/abc',
       'https://wns2-par02p.notify.windows.com/w/?token=x',
     ]) {
@@ -48,6 +49,9 @@ describe('endpoint validation', () => {
       'https://100.64.0.1/x',
       'https://evil.example/x',
       'https://push.services.mozilla.com.evil.example/x',
+      'https://jmt17.google.com.evil.example/x',
+      'https://evil.jmt17.google.com/x',
+      'https://google.com/x',
       'https://user:pw@updates.push.services.mozilla.com/x',
       'https://updates.push.services.mozilla.com:8443/x',
       'https://updates.push.services.mozilla.com/x#frag',
@@ -179,6 +183,20 @@ describe('push API', () => {
     expect(storage.getSubscription()?.endpoint).toBe(`${ENDPOINT}-2`);
   });
 
+  it.each([null, 1_800_000_000_000])('accepts browser subscription JSON with expirationTime %s', async (expirationTime) => {
+    const { storage, sent, write } = await setup();
+    const connected = await write('PUT', '/api/push/subscription', { ...body, expirationTime });
+    expect(connected.statusCode).toBe(200);
+    expect(connected.json().subscription).toEqual({ connected: true, ready: false, version: 1 });
+    expect(storage.getSubscription()).toMatchObject(KEYS);
+    expect(storage.getSubscription()).not.toHaveProperty('expirationTime');
+
+    const tested = await write('POST', '/api/push/test');
+    expect(tested.json().ok).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.sub).toMatchObject(KEYS);
+  });
+
   it('rejects unsafe or malformed subscriptions and does not store them', async () => {
     const { storage, write } = await setup();
     for (const payload of [
@@ -187,6 +205,8 @@ describe('push API', () => {
       { ...body, keys: { p256dh: 'AAAA', auth: AUTH } },
       { ...body, keys: { p256dh: P256DH, auth: 'AAAA' } },
       { ...body, extra: 1 },
+      { ...body, expirationTime: 'tomorrow' },
+      { ...body, expirationTime: {} },
       { endpoint: ENDPOINT },
     ]) {
       expect((await write('PUT', '/api/push/subscription', payload)).statusCode).toBe(400);
