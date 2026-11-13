@@ -1,9 +1,15 @@
 <!doctype html>
-<!-- Factory board/evidence shell: one graphite/cyan operations-console design with light, dark and system appearance
+<!-- Factory tracker board/evidence shell: per-ticket dots and centered connectors, solid green/red current dots
+     with halos and sonar pulses, explicit queue reasons, latest-ten collapsible Shipped and real-history stats.
+     Stats return focus to the invoking control, with a fallback for removed/hidden tickets.
+     Current assessments always show an explicit unchecked state when absent, distinct from refresh/analysis pending
+     and failed checks. They show selection, pending dependency analysis and fail-closed dependency checks separately
+     from historical results. Refresh runs a short-lived read-only command, even when scheduling is off.
+     Legacy history is marked incomplete; stopped tickets remain unfinished. Light, dark and system appearance
      (saved in the browser as sandcastle-theme). The HTTP board polls /api/runs every 10s and patches run cards by
      BoardRun.key with FLIP motion, so focus, scroll and filters survive updates. A local board.html is a static snapshot
      with no polling. Evidence pages never poll. All motion respects prefers-reduced-motion, live.
-     Code between "// <name>:start" and "// <name>:end" markers is DOM-free and loaded by board.test.mts. -->
+     Code between "// <name>:start" and "// <name>:end" markers is loaded by board.test.mts with stubbed DOM boundaries where needed. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -22,9 +28,9 @@
 <style>
   /* ---------- tokens: one design, light and dark ---------- */
   :root {
-    --bg: #e8eef3; --grid: rgba(0, 92, 128, .055); --panel: #ffffff; --panel-2: #f3f7fa; --line: #c9d6e0; --line-strong: #98aebf;
+    --bg: #edf2f8; --grid: rgba(0, 92, 128, .055); --panel: #ffffff; --panel-2: #f3f7fa; --line: #b7c5d5; --line-strong: #6d8098;
     --ink: #0c1a25; --soft: #4a5f70; --faint: #6f8394;
-    --accent: #006b8f; --accent-soft: rgba(0, 107, 143, .10); --on-accent: #ffffff;
+    --accent: #006e6a; --accent-soft: rgba(0, 110, 106, .10); --on-accent: #ffffff;
     --run: #006b8f; --run-soft: rgba(0, 107, 143, .10);
     --wait: #855600; --wait-soft: rgba(176, 116, 0, .13);
     --bad: #b3202e; --bad-soft: rgba(179, 32, 46, .10);
@@ -37,9 +43,9 @@
     color-scheme: light;
   }
   :root[data-theme="dark"] {
-    --bg: #070b10; --grid: rgba(79, 216, 255, .045); --panel: #0c131b; --panel-2: #101a24; --line: #1b2936; --line-strong: #2d4456;
-    --ink: #e4f0f7; --soft: #8fa4b5; --faint: #66798a;
-    --accent: #4fd8ff; --accent-soft: rgba(79, 216, 255, .10); --on-accent: #03121a;
+    --bg: #0a111c; --grid: rgba(79, 216, 255, .045); --panel: #101c2c; --panel-2: #152236; --line: #34465d; --line-strong: #637b98;
+    --ink: #e5eefb; --soft: #a4b6cd; --faint: #91a5bd;
+    --accent: #5ae2da; --accent-soft: rgba(90, 226, 218, .10); --on-accent: #03121a;
     --run: #4fd8ff; --run-soft: rgba(79, 216, 255, .10);
     --wait: #f2b84b; --wait-soft: rgba(242, 184, 75, .12);
     --bad: #ff6676; --bad-soft: rgba(255, 102, 118, .12);
@@ -50,15 +56,11 @@
   }
 
   /* ---------- shell ---------- */
-  * { box-sizing: border-box; }
+  *, *::before, *::after { box-sizing: border-box; }
   html { background: var(--bg); }
   body {
     margin: 0; min-height: 100vh; color: var(--ink); font: 15px/1.45 var(--sans);
-    background:
-      radial-gradient(1100px 480px at 72% -12%, var(--accent-soft), transparent 70%),
-      linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 32px 32px,
-      linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 32px 32px,
-      var(--bg);
+    background: var(--bg);
     transition: background-color .18s ease, color .18s ease;
   }
   a { color: var(--accent); text-underline-offset: 3px; }
@@ -91,19 +93,14 @@
   #app { max-width: 1440px; margin: 0 auto; padding: 0 16px 64px; }
 
   /* ---------- panels ---------- */
-  .panel { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: var(--shadow); min-width: 0;
+  .panel { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: none; min-width: 0;
     transition: background-color .18s ease, border-color .18s ease; }
-  .panel::before { content: ""; position: absolute; inset: -1px; pointer-events: none; border-radius: inherit; opacity: .75;
-    background:
-      linear-gradient(var(--accent), var(--accent)) top left / 14px 1.5px no-repeat,
-      linear-gradient(var(--accent), var(--accent)) top left / 1.5px 14px no-repeat,
-      linear-gradient(var(--accent), var(--accent)) bottom right / 14px 1.5px no-repeat,
-      linear-gradient(var(--accent), var(--accent)) bottom right / 1.5px 14px no-repeat; }
+  .panel::before { content: none; }
   .eyebrow { margin: 0; font: 600 11px/1.2 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--accent); }
 
   /* ---------- board header + summary ---------- */
   .hero { padding: 30px 0 18px; display: flex; gap: 12px 24px; align-items: flex-end; flex-wrap: wrap; }
-  .hero h1 { margin: 6px 0 0; font: 700 clamp(28px, 4vw, 40px)/1.05 var(--sans); letter-spacing: -.02em; }
+  .hero h1 { margin: 6px 0 0; font: 700 24px/1.2 var(--mono); letter-spacing: -.02em; }
   .hero .lede { margin: 8px 0 0; color: var(--soft); max-width: 62ch; }
   .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
   .tile { padding: 14px 16px 14px 18px; overflow: hidden; }
@@ -130,10 +127,10 @@
 
   /* ---------- operations layout ---------- */
   .ops { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px 22px; align-items: start; }
-  @media (min-width: 1280px) {
-    .ops { grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); }
-    #sec-history { grid-column: 2; grid-row: 1 / span 2; }
-  }
+  #sec-history { border-top: 1px solid var(--line-strong); margin-top: 20px; }
+  #sec-history > summary { cursor: pointer; list-style: none; }
+  #sec-history > summary::before { content: '▸'; }
+  #sec-history[open] > summary::before { content: '▾'; }
   .ops section { min-width: 0; }
   .sec-head { display: flex; align-items: center; gap: 12px; margin: 22px 0 12px; font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--soft); }
   .sec-head h2 { margin: 0; font: inherit; color: var(--ink); }
@@ -141,7 +138,7 @@
   .sec-head h2:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
   .sec-head::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line-strong), transparent); }
   .sec-head .n { font-variant-numeric: tabular-nums; }
-  .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); }
+  .cards { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
   @media (min-width: 1280px) { #sec-history .cards { grid-template-columns: minmax(0, 1fr); } }
   .empty { margin: 0; padding: 18px; border: 1px dashed var(--line-strong); border-radius: 6px; color: var(--soft); font-size: 13px; }
   .empty[hidden] { display: none; }
@@ -160,6 +157,24 @@
     font: 700 11px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
   .status .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
   .card h3 { margin: 0; font: 650 16px/1.3 var(--sans); }
+  .ticket-select { cursor: pointer; background: none; border: 0; color: inherit; font: inherit; padding: 0; text-align: left; }
+  .ticket-select:hover { color: var(--accent); }
+  .queue-reasons { list-style: none; margin: 0; padding: 0; color: var(--wait); font-size: 13px; }
+  .queue-reasons li::before { content: '↳ '; }
+  .queue-reasons[hidden] { display: none; }
+  .stats-button { align-self: flex-end; cursor: pointer; font: 600 12px var(--sans); padding: 6px 10px; color: var(--accent); background: var(--panel-2); border: 1px solid var(--line-strong); border-radius: 4px; }
+  .card { --stage-color: var(--ok); }
+  .card[data-health="bad"] { --stage-color: var(--bad); }
+  .card[data-unknown="true"] { --stage-color: var(--soft); }
+  @media (min-width: 950px) {
+    .card:not(.ev-hero) { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(350px, 1.4fr); gap: 8px 30px; }
+    .card:not(.ev-hero) > .card-top, .card:not(.ev-hero) > h3, .card:not(.ev-hero) > .queue-reasons { grid-column: 1; }
+    .card:not(.ev-hero) > .pipe { grid-column: 2; grid-row: 1 / span 3; align-self: center; }
+    .card:not(.ev-hero) > .stage-unknown { grid-column: 2; }
+    .card:not(.ev-hero) > .facts, .card:not(.ev-hero) > .note, .card:not(.ev-hero) > .activity, .card:not(.ev-hero) > .assessment { grid-column: 1 / -1; }
+    .card:not(.ev-hero) > .card-foot { grid-column: 1; }
+    .card:not(.ev-hero) > .stats-button { grid-column: 2; justify-self: end; }
+  }
   .facts { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 10px; font: 12px/1.45 var(--mono); color: var(--soft); }
   .facts dt { color: var(--faint); text-transform: uppercase; letter-spacing: .08em; font-size: 10.5px; padding-top: 1px; }
   .facts dd { margin: 0; min-width: 0; }
@@ -168,6 +183,11 @@
   .note[hidden] { display: none; }
   .activity { margin: 0; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .activity[hidden] { display: none; }
+  .assessment { margin: 0; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 4px; font-size: 12px; color: var(--soft); display: grid; gap: 3px; }
+  .assessment[hidden] { display: none; }
+  .assessment .a-title { font: 700 10.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  .assessment .a-bad { color: var(--bad); }
+  .assessment .a-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .card-foot { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
   .card-foot:empty { display: none; }
   .verdict { font: 700 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; padding: 5px 8px; border-radius: 4px; border: 1px solid currentColor; }
@@ -176,21 +196,26 @@
   .links { display: flex; gap: 6px 14px; flex-wrap: wrap; font: 600 12.5px/1.6 var(--sans); }
   .links:empty { display: none; }
 
-  /* pipeline: one segment per stage from setup to done */
-  .pipe { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
-  .pipe .seg { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-  .pipe i { display: block; height: 5px; border-radius: 2px; background: color-mix(in srgb, var(--soft) 22%, transparent); transform-origin: left center; }
-  .pipe small { font: 600 9.5px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .pipe .seg.done i { background: color-mix(in srgb, var(--tone) 70%, transparent); }
-  .pipe .seg.now i { background: var(--tone); box-shadow: 0 0 10px var(--glow); }
-  .pipe .seg.now small { color: var(--ink); }
-  .card[data-group="waiting"] .pipe, .card[data-group="history"] .pipe, .card[data-unknown="true"] .pipe { display: none; }
-  .card[data-tone="run"] .pipe .seg.now i { animation: breathe 2.4s ease-in-out infinite; }
-  @keyframes breathe { 50% { opacity: .55; } }
+  /* Tracker: border-box dots and connectors share a vertical center. */
+  .pipe { display: flex; padding: 8px 0; }
+  .pipe .seg { position: relative; flex: 1; min-width: 0; text-align: center; }
+  .pipe i { position: relative; z-index: 1; display: block; width: 10px; height: 10px; margin: 3px auto 8px; border: 2px solid var(--line-strong); border-radius: 50%; background: var(--panel); }
+  .pipe .seg:not(:last-child)::after { content: ''; position: absolute; left: calc(50% + 5px); width: calc(100% - 10px); top: 7px; height: 2px; background: var(--line-strong); }
+  .pipe small { display: block; font: 600 10px/1.2 var(--mono); color: var(--soft); }
+  .pipe .seg.done i, .pipe .seg.connected::after { background: var(--accent); border-color: var(--accent); }
+  .pipe .seg.now i { background: var(--stage-color); border-color: var(--stage-color); box-shadow: 0 0 10px color-mix(in srgb, var(--stage-color) 45%, transparent), 0 0 22px color-mix(in srgb, var(--stage-color) 20%, transparent); }
+  .pipe .seg.now i::after { content: ''; position: absolute; inset: -2px; border: 1px solid var(--stage-color); border-radius: 50%; pointer-events: none; animation: sonar 1.8s linear infinite; }
+  .pipe .seg.now small { color: var(--ink); font-weight: 700; }
+  .card[data-group="history"] .pipe { display: none; }
+  .stage-unknown { display: flex; align-items: center; gap: 10px; font: 12px var(--mono); color: var(--soft); }
+  .stage-unknown[hidden] { display: none; }
+  .stage-unknown::before { content: ''; width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--stage-color); box-shadow: 0 0 12px color-mix(in srgb, var(--stage-color) 40%, transparent); }
+  @keyframes sonar { from { transform: scale(0); opacity: .65; } to { transform: scale(3.2); opacity: 0; } }
+  :root[data-hidden="true"] .pipe .seg.now i::after { animation-play-state: paused; }
 
   /* data-change cues, triggered from script and skipped under reduced motion */
   .card.flash { animation: flash .9s var(--ease); }
-  .card.flash .pipe .seg.now i, .card.flash .pipe .seg.done:last-child i { animation: sweep .45s var(--ease); }
+  .card.flash .pipe .seg.now small { color: var(--stage-color); }
   @keyframes flash { from { box-shadow: 0 0 0 1px var(--tone), 0 0 26px var(--glow); } }
   @keyframes sweep { from { transform: scaleX(0); } }
   .ghost { pointer-events: none; }
@@ -211,6 +236,25 @@
   .ev-card img, .ev-card video { display: block; width: 100%; max-height: 65vh; object-fit: contain; background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; }
   .ev-card pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 var(--mono); max-height: 65vh; overflow: auto; padding: 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; }
   .ev-card .sub { margin: 0; color: var(--soft); font-size: 12px; }
+
+  /* ---------- ticket stats ---------- */
+  .ticket-stats { margin: 0 0 0 auto; width: min(540px, 100%); max-width: 100%; height: 100dvh; max-height: 100dvh; padding: 24px; border: 1px solid var(--line-strong); color: var(--ink); background: var(--panel); box-shadow: var(--shadow); }
+  .ticket-stats::backdrop { background: rgba(2, 8, 14, .55); }
+  .stats-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; position: sticky; top: -24px; padding: 12px 0; background: var(--panel); z-index: 2; }
+  .stats-head h2 { margin: 0; font: 600 15px var(--mono); }
+  .ticket-stats h3 { font-size: 15px; margin: 20px 0 10px; }
+  .ticket-stats .stats-title { font-size: 20px; }
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 18px 0; }
+  .stat { border: 1px solid var(--line-strong); border-radius: 4px; padding: 12px; }
+  .stat span { display: block; color: var(--soft); font-size: 12px; }
+  .stat b { display: block; margin-top: 4px; font: 600 21px var(--mono); }
+  .ticket-stats table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .ticket-stats th, .ticket-stats td { text-align: left; border-bottom: 1px solid var(--line); padding: 8px 0; }
+  .ticket-stats th:last-child, .ticket-stats td:last-child { text-align: right; }
+  .stats-history { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  .stats-history li { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .stats-history small { display: block; color: var(--soft); }
+  .stats-note { color: var(--soft); font-size: 12px; }
 
   /* ---------- appearance drawer ---------- */
   .scrim { position: fixed; inset: 0; z-index: 40; background: rgba(2, 8, 14, .45); opacity: 0; pointer-events: none; transition: opacity .24s ease; }
@@ -246,6 +290,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
+    .pipe .seg.now i::after { display: none; }
   }
 
   /* ---------- small screens ---------- */
@@ -254,6 +299,8 @@
     .tile .num { font-size: 30px; }
     .sync .detail { display: none; }
     .hero { padding-top: 22px; }
+    .pipe small { font-size: 9px; }
+    .card { padding: 14px 10px; }
   }
 </style>
 </head>
@@ -293,6 +340,10 @@
   <p class="settings-note">Saved in this browser. System follows your OS setting as it changes.</p>
 </aside>
 
+<dialog id="ticket-stats" class="ticket-stats" aria-labelledby="stats-title">
+  <div class="stats-head"><h2 id="stats-title">Ticket stats</h2><button id="stats-close" class="stats-button" type="button" autofocus>Close</button></div>
+  <div id="stats-body"></div>
+</dialog>
 <script id="data" type="application/json">/*__DATA__*/null</script>
 <script>
 (function () {
@@ -302,20 +353,20 @@
   var fileMode = location.protocol === 'file:';
 
   // model:start
-  // Pure board model: stage metadata, grouping, counts, filters, link safety, snapshot checks and keyed diffs.
-  var PATH = ['setup', 'implementing', 'verifying', 'posting', 'pushing', 'ci', 'done'];
-  var PATH_LABELS = ['Setup', 'Build', 'Verify', 'Post', 'Push', 'CI', 'Done'];
+  // Pure tracker model: real stages, visible Shipped limit, queue reasons, recorded stats and safe links.
+  var PATH = ['queued', 'setup', 'implementing', 'verifying', 'posting', 'pushing', 'ci', 'done'];
+  var PATH_LABELS = ['Queue', 'Setup', 'Build', 'Verify', 'Post', 'Push', 'CI', 'Shipped'];
   var STAGES = {
     queued:       { label: 'Queued',             tone: 'wait', group: 'waiting' },
-    waiting:      { label: 'Blocked',            tone: 'wait', group: 'waiting' },
+    waiting:      { label: 'Blocked',            tone: 'bad',  group: 'active' },
     setup:        { label: 'Setting up',         tone: 'run',  group: 'active' },
     implementing: { label: 'Implementing',       tone: 'run',  group: 'active' },
     verifying:    { label: 'Verifying',          tone: 'run',  group: 'active' },
     posting:      { label: 'Posting evidence',   tone: 'run',  group: 'active' },
     pushing:      { label: 'Pushing',            tone: 'run',  group: 'active' },
     ci:           { label: 'CI running',         tone: 'run',  group: 'active' },
-    done:         { label: 'Done',               tone: 'ok',   group: 'history' },
-    stopped:      { label: 'Stopped',            tone: 'bad',  group: 'history' }
+    done:         { label: 'Shipped',            tone: 'ok',   group: 'history' },
+    stopped:      { label: 'Stopped',            tone: 'bad',  group: 'active' }
   };
   var GROUPS = ['active', 'waiting', 'history'];
   var QUIET_MS = 20 * 60 * 1000;
@@ -327,12 +378,78 @@
     return { label: String(stage || 'unknown'), tone: 'run', group: 'active', step: -1, unknown: true };
   }
   function time(iso) { var t = Date.parse(iso); return isNaN(t) ? null : t; }
-  function isQuiet(run, now) { var t = time(run.updatedAt); return stageInfo(run.stage).group === 'active' && t !== null && now - t > QUIET_MS; }
-  function needsAttention(run, now) { return run.stage === 'stopped' || isQuiet(run, now); }
+  function isQuiet(run, now) { var t = time(run.updatedAt), info = stageInfo(run.stage); return info.group === 'active' && info.tone === 'run' && t !== null && now - t > QUIET_MS; }
+  function needsAttention(run, now) { return run.stage === 'waiting' || run.stage === 'stopped' || isQuiet(run, now); }
+  function recordedVisits(run) {
+    return (Array.isArray(run.stageHistory) ? run.stageHistory : []).filter(function (visit) {
+      return visit && typeof visit.stage === 'string' && time(visit.at) !== null;
+    });
+  }
+  function trackerStep(run) {
+    var step = PATH.indexOf(run.stage);
+    if (step >= 0) return step;
+    if (run.stage !== 'waiting' && run.stage !== 'stopped') return -1;
+    var history = recordedVisits(run);
+    for (var i = history.length - 1; i >= 0; i--) {
+      var previous = PATH.indexOf(history[i].stage);
+      if (previous > 0 && previous < PATH.length - 1) return previous;
+    }
+    return -1; // Never invent a stage for legacy blocked/stopped records.
+  }
+  function queueReasons(run) {
+    var reasons = Array.isArray(run.queueReasons) ? run.queueReasons.filter(function (r) { return r && typeof r.code === 'string' && typeof r.text === 'string' && r.text.trim(); }) : [];
+    if (!reasons.length && typeof run.note === 'string' && run.note.trim()) reasons = [{ code: /^(waiting for a free slot|Docket is full)$/i.test(run.note.trim()) ? 'docket_full' : 'note', text: run.note }];
+    reasons = reasons.filter(function (r, i) { return reasons.findIndex(function (other) { return other.code === r.code && other.text === r.text; }) === i; });
+    var other = reasons.filter(function (r) { return r.code !== 'docket_full'; });
+    return (other.length ? other : reasons.length ? reasons : [{ code: 'unknown', text: 'Queue reason unavailable' }]).map(function (r) {
+      return { code: r.code, text: r.code === 'docket_full' ? 'Docket is full' : r.text };
+    });
+  }
+  function duration(ms) {
+    if (ms === null || !Number.isFinite(ms)) return 'Unavailable';
+    var seconds = Math.max(0, Math.floor(ms / 1000));
+    return (seconds >= 3600 ? Math.floor(seconds / 3600) + ':' : '') + String(Math.floor(seconds / 60) % 60).padStart(2, '0') + ':' + String(seconds % 60).padStart(2, '0');
+  }
+  function ticketStats(run, now) {
+    var history = recordedVisits(run);
+    var complete = run.historyComplete === true && history.length > 0 && history.length === run.stageHistory.length;
+    var last = history[history.length - 1];
+    if (last && last.stage !== run.stage) {
+      complete = false; // A legacy writer changed the stage without recording a visit.
+      if (time(run.stageSince) !== null && time(run.stageSince) >= time(last.at)) history.push({ stage: run.stage, at: run.stageSince, note: run.note, reasons: run.queueReasons });
+    } else if (last && run.stage !== 'queued' && run.stage !== 'waiting' && run.stageSince && last.at !== run.stageSince) complete = false;
+    var totals = {}, visits = {}, blockers = [], bounces = [], running = 0, queued = 0, blocked = 0, previous = null;
+    var end = run.stage === 'done' || run.stage === 'stopped' ? time(run.stageSince) : now;
+    var knownEnd = end !== null;
+    if (!knownEnd) { complete = false; end = now; }
+    if (!history.length && time(run.stageSince) !== null) history = [{ stage: run.stage, at: run.stageSince, note: run.note, reasons: run.queueReasons }];
+    history.forEach(function (visit, i) {
+      if (!knownEnd && i === history.length - 1) return;
+      var start = time(visit.at), finish = i + 1 < history.length ? time(history[i + 1].at) : end;
+      if (start === null || finish === null || finish < start) { complete = false; return; }
+      var ms = Math.max(0, Math.min(finish, end) - start);
+      if (visit.stage === 'queued') queued += ms;
+      else if (visit.stage === 'waiting' || visit.stage === 'stopped') blocked += ms;
+      else if (PATH.indexOf(visit.stage) > 0 && visit.stage !== 'done') {
+        running += ms;
+        totals[visit.stage] = (totals[visit.stage] || 0) + ms;
+        if (visit.stage !== previous) visits[visit.stage] = (visits[visit.stage] || 0) + 1;
+        if (previous && PATH.indexOf(visit.stage) < PATH.indexOf(previous)) bounces.push({ from: previous, to: visit.stage, at: visit.at, reason: visit.note || 'Reason not recorded' });
+        previous = visit.stage;
+      } else if (visit.stage !== 'done') complete = false;
+      if (visit.stage === 'queued' || visit.stage === 'waiting' || visit.stage === 'stopped') {
+        var reasons = queueReasons({ note: visit.note, queueReasons: visit.reasons });
+        blockers.push({ stage: visit.stage, at: visit.at, ms: ms, reasons: reasons });
+      }
+    });
+    var start = complete ? time(history[0].at) : time(run.startedAt);
+    return { complete: complete, totals: totals, visits: visits, running: running, queued: queued, blocked: blocked,
+      elapsed: start === null || !knownEnd ? null : Math.max(0, end - start), blockers: blockers, bounces: bounces };
+  }
   var FILTERS = {
     all: function () { return true; },
-    active: function (r) { return stageInfo(r.stage).group === 'active'; },
-    waiting: function (r) { return stageInfo(r.stage).group === 'waiting'; },
+    active: function (r) { return stageInfo(r.stage).tone === 'run'; },
+    waiting: function (r) { return r.stage === 'queued'; },
     attention: needsAttention,
     done: function (r) { return r.stage === 'done'; }
   };
@@ -343,9 +460,8 @@
   function summarize(runs, now) {
     var c = { all: runs.length, active: 0, waiting: 0, attention: 0, done: 0 };
     runs.forEach(function (r) {
-      var g = stageInfo(r.stage).group;
-      if (g === 'active') c.active++;
-      if (g === 'waiting') c.waiting++;
+      if (stageInfo(r.stage).tone === 'run') c.active++;
+      if (r.stage === 'queued') c.waiting++;
       if (r.stage === 'done') c.done++;
       if (needsAttention(r, now)) c.attention++;
     });
@@ -360,6 +476,7 @@
     });
     out.waiting.sort(function (a, b) { return (time(a.stageSince) - time(b.stageSince)) || byKey(a, b); });
     out.history.sort(function (a, b) { return (time(b.stageSince) - time(a.stageSince)) || byKey(a, b); });
+    out.history = out.history.slice(0, 10);
     return out;
   }
   function projects(runs) {
@@ -524,11 +641,12 @@
   // ---------- board ----------
   var board = {
     runs: Array.isArray(data.runs) ? data.runs : [],
-    now: Date.now(),
+    now: time(data.generatedAt) || Date.now(),
     syncedAt: time(data.generatedAt) || Date.now(),
     filter: 'all',
     project: '',
     cards: new Map(),
+    selectedKey: null,
     refs: null
   };
   try {
@@ -536,25 +654,25 @@
     if (Object.prototype.hasOwnProperty.call(FILTERS, savedFilter)) board.filter = savedFilter;
     board.project = sessionStorage.getItem('factory-project') || '';
   } catch (_) {}
-  var FILTER_LABELS = [['all', 'All'], ['active', 'Active'], ['waiting', 'Waiting'], ['attention', 'Attention'], ['done', 'Done']];
+  var FILTER_LABELS = [['all', 'All'], ['active', 'Working'], ['waiting', 'Queued'], ['attention', 'Attention'], ['done', 'Shipped']];
   var TILES = [
     ['active', 'Active', 'run', 'Running a stage now'],
-    ['waiting', 'Queued / waiting', 'wait', 'Not started or blocked'],
-    ['attention', 'Attention', 'bad', 'Stopped, or quiet 20m+'],
-    ['done', 'Completed', 'ok', 'Ready to merge or merged']
+    ['waiting', 'Queued', 'wait', 'Waiting for admission'],
+    ['attention', 'Attention', 'bad', 'Blocked, stopped, or quiet 20m+'],
+    ['done', 'Shipped', 'ok', 'All completions; latest 10 shown below']
   ];
   var SECTIONS = {
-    active: ['Active operations', 'No runs are working right now.'],
-    waiting: ['Queued & waiting', 'Nothing is queued or blocked.'],
-    history: ['History', 'No finished or stopped runs yet.']
+    active: ['In progress', 'No unfinished runs right now.'],
+    waiting: ['Queued', 'No queued tickets.'],
+    history: ['Shipped', 'No shipped tickets yet.']
   };
 
   function buildBoard() {
     var refs = { tiles: {}, buttons: {}, lists: {}, heads: {}, counts: {}, empties: {} };
     var hero = reveal(el('header', 'hero'), 0);
     var intro = el('div');
-    add(intro, el('p', 'eyebrow', 'Factory · Operations'), el('h1', null, 'Run control'),
-      el('p', 'lede', 'Every ticket the dispatcher has picked up, from queue to merge-ready. Stages, notes and links come straight from the run records.'));
+    add(intro, el('p', 'eyebrow', 'Factory · Operations'), el('h1', null, 'Ticket trackers'),
+      el('p', 'lede', 'One tracker per ticket. Select a ticket for its timings, blockers and bounces.'));
     hero.appendChild(intro);
     app.appendChild(hero);
 
@@ -594,9 +712,9 @@
 
     var ops = el('div', 'ops');
     GROUPS.forEach(function (g, i) {
-      var sec = reveal(el('section'), 6 + i);
+      var sec = reveal(el(g === 'history' ? 'details' : 'section'), 6 + i);
       sec.id = 'sec-' + g;
-      var head = el('div', 'sec-head');
+      var head = el(g === 'history' ? 'summary' : 'div', 'sec-head');
       var h2 = el('h2', null, SECTIONS[g][0]);
       h2.tabIndex = -1;
       h2.id = 'h-' + g;
@@ -631,6 +749,10 @@
     add(status, el('i', 'dot'), statusText);
     add(top, tid, proj, status);
     var title = el('h3');
+    var selectTicket = el('button', 'ticket-select');
+    selectTicket.type = 'button';
+    selectTicket.addEventListener('click', function () { openStats(run.key, selectTicket); });
+    title.appendChild(selectTicket);
     var pipe = el('div', 'pipe');
     pipe.setAttribute('role', 'img');
     var segs = PATH_LABELS.map(function (label) {
@@ -642,42 +764,105 @@
     var facts = el('dl', 'facts');
     function fact(name) { var dt = el('dt', null, name), dd = el('dd'); add(facts, dt, dd); return { dt: dt, dd: dd }; }
     var branch = fact('Branch'), timing = fact('Time');
+    var unknownStage = el('p', 'stage-unknown', 'Stage unavailable in this record');
+    unknownStage.hidden = true;
+    var reasons = el('ul', 'queue-reasons');
     var note = el('p', 'note');
     var activity = el('p', 'activity');
     var foot = el('div', 'card-foot');
-    add(card, top, title, pipe, facts, note, activity, foot);
-    return { el: card, tid: tid, proj: proj, statusText: statusText, title: title, pipe: pipe, segs: segs,
-      branch: branch, timing: timing, note: note, activity: activity, foot: foot, sig: '', stage: run.stage };
+    var assess = el('div', 'assessment');
+    var refresh = el('button', 'stats-button', 'Refresh ticket');
+    refresh.type = 'button';
+    refresh.addEventListener('click', function () {
+      if (refresh.disabled) return;
+      refresh.disabled = true;
+      refresh.textContent = 'Requesting…';
+      fetch('/api/refresh/' + encodeURIComponent(run.key), { method: 'POST', headers: { 'x-factory-refresh': '1' } })
+        .then(function (r) { refresh.textContent = r.ok ? 'Refresh requested' : 'Refresh failed'; })
+        .catch(function () { refresh.textContent = 'Refresh failed'; })
+        .then(function () { setTimeout(function () { refresh.disabled = false; refresh.textContent = 'Refresh ticket'; }, 4000); });
+    });
+    var stats = el('button', 'stats-button', 'View stats ↗');
+    stats.type = 'button';
+    stats.addEventListener('click', function () { openStats(run.key, stats); });
+    card.addEventListener('click', function (event) { if (!event.target.closest('a, button')) openStats(run.key, selectTicket); });
+    add(card, top, title, pipe, unknownStage, reasons, facts, note, activity, assess, foot, refresh, stats);
+    return { el: card, tid: tid, proj: proj, statusText: statusText, title: selectTicket, pipe: pipe, segs: segs,
+      unknownStage: unknownStage, reasons: reasons, branch: branch, timing: timing, note: note, activity: activity, assess: assess, refresh: refresh, foot: foot, sig: '', stage: run.stage };
   }
+
+  // assessment:start
+  // The ticket as the tracker shows it now (run.assessment), apart from the run's own record above.
+  function renderAssessment(c, run, now) {
+    var a = run.assessment, f = a && a.facts;
+    c.refresh.hidden = fileMode;
+    c.assess.hidden = false;
+    if (!a) {
+      c.assess.replaceChildren(el('span', 'a-title', 'Current ticket: not checked yet'));
+      return;
+    }
+    var rows = [el('span', 'a-title', 'Current ticket')];
+    if (f) {
+      var line = el('div', 'a-row');
+      add(line, el('span', null, f.state === 'closed' ? 'Closed in tracker' : 'Open in tracker'));
+      if (f.selected === false) line.appendChild(el('span', 'a-bad', 'Not selected: ' + (f.selectionReason || 'outside current filters')));
+      if (f.model) line.appendChild(el('span', null, 'Model ' + f.model));
+      if (f.modelError) line.appendChild(el('span', 'a-bad', f.modelError));
+      line.appendChild(el('span', null, 'Checked ' + ago(f.checkedAt, now) + ' ago'));
+      rows.push(line);
+      if (f.title && run.title && f.title !== run.title) rows.push(el('div', null, 'Title now: ' + f.title));
+    } else rows.push(el('div', null, 'Not checked yet'));
+    if (a.pending) rows.push(el('div', null, 'Refresh requested: checking current tracker facts.'));
+    if (a.analysisState === 'pending') rows.push(el('div', null, 'Pending analysis: dependency conclusions are stale until read-only analysis completes.'));
+    if (a.analysisState === 'error') rows.push(el('div', 'a-bad', 'Dependency analysis failed: ' + a.analysisError + '. Previous conclusions are stale.'));
+    if (a.analysisState === 'current' && a.dependencies) a.dependencies.forEach(function (d) {
+      rows.push(el('div', d.state === 'satisfied' ? null : 'a-bad', 'Dependency ' + (d.iid == null ? 'unresolved / human-only' : '#' + d.iid) + ': ' + d.state + (d.what ? ' (' + d.what + ')' : '')));
+    });
+    if (a.changed) rows.push(el('div', null, 'Requirements changed since the last run was built. The run result above is unchanged.'));
+    if (a.retryRequired) rows.push(el('div', 'a-bad', a.retryRequired));
+    if (a.error) rows.push(el('div', 'a-bad', 'Last check failed ' + ago(a.attemptedAt, now) + ' ago: ' + a.error + (f ? ' Showing the last good check.' : '')));
+    c.assess.replaceChildren.apply(c.assess, rows);
+  }
+  // assessment:end
 
   function updateCard(c, run, now) {
     var info = stageInfo(run.stage), quiet = isQuiet(run, now);
+    c.el.dataset.key = run.key;
+    c.el.dataset.health = needsAttention(run, now) ? 'bad' : 'good';
     c.el.dataset.tone = quiet ? 'bad' : info.tone;
     c.el.dataset.group = info.group;
     c.el.dataset.unknown = String(info.unknown);
     c.proj.textContent = run.project || '';
     c.statusText.textContent = quiet ? info.label + ' · quiet' : info.label;
     c.title.textContent = run.title || run.key;
-    var step = info.step;
+    var step = trackerStep(run);
     c.segs.forEach(function (s, i) {
       s.classList.toggle('done', i < step || run.stage === 'done');
+      s.classList.toggle('connected', i < step);
       s.classList.toggle('now', i === step && run.stage !== 'done');
     });
-    c.pipe.setAttribute('aria-label', step >= 0 ? 'Stage ' + (step + 1) + ' of ' + PATH.length + ': ' + info.label : info.label);
+    c.pipe.setAttribute('aria-label', step >= 0 ? info.label + ' at ' + PATH_LABELS[step] + ', stage ' + (step + 1) + ' of ' + PATH.length : info.label + '. Stage unavailable');
+    c.unknownStage.hidden = step >= 0 || run.stage === 'done';
+    c.reasons.hidden = run.stage !== 'queued' && run.stage !== 'waiting';
+    if (!c.reasons.hidden) {
+      var reasonNodes = queueReasons(run).map(function (r) { return el('li', null, r.text); });
+      c.reasons.replaceChildren.apply(c.reasons, reasonNodes);
+    }
     var b = run.branch ? run.branch + (run.base ? ' → ' + run.base : '') : '';
     c.branch.dd.textContent = b;
     c.branch.dt.hidden = c.branch.dd.hidden = !b;
     var t;
-    if (info.group === 'waiting') t = 'waiting ' + ago(run.stageSince, now);
-    else if (info.group === 'history') t = 'finished ' + ago(run.stageSince, now) + ' ago · started ' + ago(run.startedAt, now) + ' ago';
+    if (run.stage === 'queued' || run.stage === 'waiting') t = (run.stage === 'waiting' ? 'blocked ' : 'queued ') + ago(run.stageSince, now);
+    else if (run.stage === 'done' || run.stage === 'stopped') t = (run.stage === 'stopped' ? 'stopped ' : 'completed ') + ago(run.stageSince, now) + ' ago · started ' + ago(run.startedAt, now) + ' ago';
     else t = 'in stage ' + ago(run.stageSince, now) + ' · started ' + ago(run.startedAt, now) + ' ago';
     if (quiet) t += ' · last update ' + ago(run.updatedAt, now) + ' ago · pid ' + run.pid;
     c.timing.dd.textContent = t;
     c.note.textContent = run.note || '';
-    c.note.hidden = !run.note;
+    c.note.hidden = !run.note || run.stage === 'queued' || run.stage === 'waiting';
     c.activity.textContent = run.activity || '';
     c.activity.title = run.activity ? 'Latest agent output, ' + ago(run.activityAt, now) + ' ago' : '';
     c.activity.hidden = !run.activity;
+    renderAssessment(c, run, now);
     // Links are rebuilt only when they change, so a focused link survives a refresh.
     var sig = JSON.stringify([run.iid, run.ticketUrl, run.mr, run.evidenceUrl, run.verdict]);
     if (sig !== c.sig) {
@@ -691,6 +876,72 @@
       if (run.evidenceUrl) links.appendChild(link(run.evidenceUrl, 'Evidence'));
       if (links.children.length) c.foot.appendChild(links);
     }
+  }
+
+  // Stats use recorded visits only. A legacy record never receives fabricated zeroes.
+  // stats-focus:start
+  var statsDialog = document.getElementById('ticket-stats');
+  function openStats(key, invokingControl) {
+    board.selectedKey = key;
+    board.statsOpener = invokingControl || document.activeElement;
+    renderStats();
+    if (!statsDialog.open) statsDialog.showModal();
+  }
+  document.getElementById('stats-close').addEventListener('click', function () { statsDialog.close(); });
+  statsDialog.addEventListener('close', function () {
+    var opener = board.statsOpener;
+    board.selectedKey = null;
+    if (opener && opener.isConnected && !opener.closest('details:not([open])')) opener.focus({ preventScroll: true });
+    else document.querySelector('#sec-history > summary').focus({ preventScroll: true });
+  });
+  // stats-focus:end
+  function renderStats() {
+    if (!board.selectedKey) return;
+    var current = board.runs.find(function (r) { return r.key === board.selectedKey; });
+    if (current) { board.selectedRun = current; board.selectedAt = board.now; }
+    var run = board.selectedRun;
+    if (!run) return;
+    var stats = ticketStats(run, board.selectedAt), content = el('div');
+    document.getElementById('stats-title').textContent = ticketLabel(run) + ' / Stats';
+    add(content, el('h3', 'stats-title', run.title || run.key), el('p', 'stats-note', [run.project, stageInfo(run.stage).label].filter(Boolean).join(' · ')));
+    if (!current) content.appendChild(el('p', 'stats-note', 'This ticket is no longer in the latest snapshot. These are its last recorded stats.'));
+    if (!stats.complete) content.appendChild(el('p', 'stats-note', 'Full history unavailable. Stage rows show recorded time only; earlier visits, blockers and bounces may be missing.'));
+    var metrics = el('div', 'stats-grid');
+    [['Running time', stats.complete ? stats.running : null], ['Total elapsed', stats.elapsed], ['Queued time', stats.complete ? stats.queued : null], ['Blocked time', stats.complete ? stats.blocked : null]].forEach(function (metric) {
+      var box = el('div', 'stat'); add(box, el('span', null, metric[0]), el('b', null, duration(metric[1]))); metrics.appendChild(box);
+    });
+    add(content, metrics, el('h3', null, 'Time per stage'));
+    var table = el('table'), head = el('thead'), header = el('tr'), body = el('tbody');
+    add(header, el('th', null, 'Stage · all recorded visits'), el('th', null, 'Running time')); head.appendChild(header);
+    PATH.forEach(function (stage, i) {
+      if (stage === 'queued' || stage === 'done') return;
+      var row = el('tr'), known = Object.prototype.hasOwnProperty.call(stats.totals, stage);
+      add(row, el('td', null, PATH_LABELS[i] + (stats.visits[stage] > 1 ? ' · ' + stats.visits[stage] + ' visits' : '')), el('td', 'mono', duration(known ? stats.totals[stage] : stats.complete ? 0 : null)));
+      body.appendChild(row);
+    });
+    add(table, head, body); content.appendChild(table);
+    content.appendChild(el('p', 'stats-note', 'Running time excludes queued and blocked intervals. Total elapsed ends at completion, or at the recorded stop time. Legacy elapsed time starts at startedAt.'));
+    content.appendChild(el('h3', null, 'Current blockers'));
+    var currentBlockers = run.stage === 'queued' || run.stage === 'waiting' || run.stage === 'stopped' ? queueReasons(run).map(function (r) { return r.text; }) : isQuiet(run, board.selectedAt) ? ['No updates for 20+ minutes'] : [];
+    content.appendChild(el('p', 'stats-note', currentBlockers.join('; ') || 'None'));
+    content.appendChild(el('h3', null, 'Recorded blocker episodes · ' + stats.blockers.length));
+    var blockers = el('ul', 'stats-history');
+    stats.blockers.forEach(function (episode) {
+      var item = el('li', null, episode.reasons.map(function (r) { return r.text; }).join('; '));
+      item.appendChild(el('small', 'mono', new Date(episode.at).toLocaleString() + ' · ' + duration(episode.ms))); blockers.appendChild(item);
+    });
+    if (!stats.blockers.length) blockers.appendChild(el('li', null, stats.complete ? 'No blockers recorded.' : 'No blocker history available.'));
+    content.appendChild(blockers);
+    content.appendChild(el('h3', null, 'Bounces · ' + (stats.complete ? stats.bounces.length : 'full count unavailable')));
+    var bounces = el('ul', 'stats-history');
+    stats.bounces.forEach(function (bounce) {
+      var item = el('li', null, stageInfo(bounce.from).label + ' → ' + stageInfo(bounce.to).label);
+      item.appendChild(el('small', null, new Date(bounce.at).toLocaleString() + ' · ' + bounce.reason)); bounces.appendChild(item);
+    });
+    if (!stats.bounces.length) bounces.appendChild(el('li', null, stats.complete ? 'No bounces recorded.' : 'No bounces in available history.'));
+    content.appendChild(bounces);
+    content.appendChild(el('p', 'stats-note', 'Measurements as of ' + new Date(board.selectedAt).toLocaleString() + '. Concurrent queue reasons share one interval.'));
+    document.getElementById('stats-body').replaceChildren(content);
   }
 
   function updateCounts(animate) {
@@ -744,16 +995,22 @@
     return list;
   }
   function focusFallback(lost) {
-    var near = lost.near.filter(function (n) { return n.isConnected && !n.hidden && n.querySelector('a'); })[0];
-    return near ? near.querySelector('a') : board.refs.heads[lost.group];
+    var shipped = document.getElementById('sec-history');
+    if (lost.group === 'history' && !shipped.open) return shipped.querySelector('summary');
+    var near = lost.near.filter(function (n) { return n.isConnected && !n.hidden && n.querySelector('button, a'); })[0];
+    return near ? near.querySelector('button, a') : board.refs.heads[lost.group];
   }
 
   function patch(animate) {
-    var now = board.now, runs = board.runs, cards = board.cards;
+    var now = board.now, cards = board.cards;
+    // Filter first, then select the latest ten completions for this Board view.
+    var runs = board.runs.filter(function (run) { return matches(run, board.filter, board.project, now); });
+    var groups = layout(runs, now);
+    var displayed = GROUPS.reduce(function (out, group) { return out.concat(groups[group]); }, []);
     animate = animate && !calm();
     var prev = new Map();
     cards.forEach(function (c, key) { prev.set(key, c.stage); });
-    var diff = diffRuns(prev, runs);
+    var diff = diffRuns(prev, displayed);
     var first = new Map();
     if (animate) cards.forEach(function (c, key) {
       c.el.getAnimations().forEach(function (a) { a.cancel(); });
@@ -768,7 +1025,7 @@
       c.el.remove();
       cards.delete(key);
     });
-    var groups = layout(runs, now), added = new Set(diff.added), changed = new Set(diff.changed);
+    var added = new Set(diff.added), changed = new Set(diff.changed);
     GROUPS.forEach(function (g) {
       var list = board.refs.lists[g], prevEl = null, visible = 0;
       groups[g].forEach(function (run) {
@@ -788,7 +1045,9 @@
     // Moving a node blurs it; put focus back, or on the nearest neighbour if its run went away.
     if (lost) focusFallback(lost).focus({ preventScroll: true });
     else if (active && active !== document.body && active.isConnected && document.activeElement !== active) active.focus({ preventScroll: true });
+    if (active && active.isConnected && active.closest('details:not([open])')) active.closest('details').querySelector('summary').focus({ preventScroll: true });
     updateCounts(animate);
+    renderStats();
     if (!animate) return;
     cards.forEach(function (c, key) {
       if (c.el.hidden) return;
@@ -811,6 +1070,9 @@
   }
 
   function startBoard() {
+    function syncVisibility() { root.dataset.hidden = String(document.hidden); }
+    syncVisibility();
+    document.addEventListener('visibilitychange', syncVisibility);
     buildBoard();
     patch(false);
     if (fileMode || !shouldPoll(data, location.protocol)) {
@@ -861,7 +1123,7 @@
     add(heading, el('p', 'eyebrow', 'Evidence'), el('h1', null, '#' + run.iid + ' · ' + (run.title || run.key)),
       el('div', 'sub', [run.project, run.branch ? run.branch + (run.base ? ' → ' + run.base : '') : ''].filter(Boolean).join(' · ')));
     var status = el('span', 'status');
-    add(status, el('i', 'dot'), el('span', null, info.label + ' · ' + (info.group === 'history' ? 'finished ' + ago(run.stageSince, now) + ' ago' : 'for ' + ago(run.stageSince, now))));
+    add(status, el('i', 'dot'), el('span', null, info.label + ' · ' + (run.stage === 'done' || run.stage === 'stopped' ? 'finished ' + ago(run.stageSince, now) + ' ago' : 'for ' + ago(run.stageSince, now))));
     var foot = el('div', 'card-foot');
     if (run.verdict) foot.appendChild(el('span', 'verdict ' + (run.verdict === 'PASS' ? 'pass' : 'fail'), run.verdict === 'PASS' ? 'Verified' : run.verdict));
     var links = el('div', 'links');
