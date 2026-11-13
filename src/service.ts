@@ -8,6 +8,8 @@ import { createOpenAIInterpreter } from './openai.ts';
 import { pushPlugin } from './push-routes.ts';
 import { WebPushTransport } from './push.ts';
 import { settingsPlugin } from './settings.ts';
+import { statusPlugin } from './status.ts';
+import { DeliveryWorker } from './worker.ts';
 import { createApp, loggerOptions, type AppDependencies, type FeaturePlugin } from './routes.ts';
 
 export interface RunningService {
@@ -45,6 +47,11 @@ export async function startService(env: NodeJS.ProcessEnv, options: StartOptions
           vapid: { subject: config.push.subject, publicKey: config.push.publicKey, privateKey: config.push.privateKey.reveal() },
         })
       : undefined);
+  // The worker never uses the model: saved reminders deliver with OpenAI disabled.
+  const deliveryWorker =
+    options.adapters?.worker === undefined
+      ? new DeliveryWorker({ storage, clock, pushTransport, forcePaused: config.pauseNotifications })
+      : undefined;
   const app = createApp(
     {
       config,
@@ -52,11 +59,13 @@ export async function startService(env: NodeJS.ProcessEnv, options: StartOptions
       clock,
       logger: options.logger ?? loggerOptions('info'),
       ...options.adapters,
+      ...(deliveryWorker !== undefined ? { worker: deliveryWorker } : {}),
       ...(modelInterpreter !== undefined ? { modelInterpreter } : {}),
       ...(pushTransport !== undefined ? { pushTransport } : {}),
     },
-    [authPlugin, settingsPlugin, pushPlugin, chatPlugin, ...(options.featurePlugins ?? [])],
+    [authPlugin, settingsPlugin, pushPlugin, statusPlugin, chatPlugin, ...(options.featurePlugins ?? [])],
   );
+  deliveryWorker?.setLogger(app.log);
   try {
     await app.listen({ host: config.host, port: config.port });
   } catch (error) {

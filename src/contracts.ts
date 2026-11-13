@@ -367,18 +367,25 @@ export interface DeliveryRecordStore {
   listDeliveryAttempts(reminderId: string): DeliveryAttempt[];
 }
 
-/**
- * Declared now, implemented by the delivery-recovery task. `SqliteStorage` does not
- * implement it yet.
- */
+/** Four total attempts per reminder, with these waits after attempts 1, 2 and 3. */
+export const MAX_DELIVERY_ATTEMPTS = 4;
+export const DELIVERY_RETRY_DELAYS_MS: readonly number[] = [30_000, 120_000, 600_000];
+
+/** Transactional delivery claims. One claim covers exactly one attempt. */
 export interface DeliveryLeaseStore {
-  /** Moves due `scheduled`/`retry` reminders to `sending` with a lease and claim token. */
+  /** Moves due `scheduled`/`retry` reminders to `sending` with a lease and claim token. Counts the attempt. */
   claimDueReminders(options: { limit: number; leaseMs: number }): Reminder[];
   markAccepted(reminderId: string, claimToken: string): boolean;
   scheduleRetry(reminderId: string, claimToken: string, nextAttemptAt: number, errorCode: string): boolean;
   markFailed(reminderId: string, claimToken: string, errorCode: string): boolean;
-  /** Returns expired `sending` reminders to a deliverable state. */
-  recoverExpiredLeases(): number;
+  /**
+   * Returns `sending` reminders whose lease expired (all of them with `all`, for the first
+   * pass after a restart) to `retry`, or `failed` once `maxAttempts` is used. Their open
+   * attempts become `unknown`: the push may or may not have been accepted.
+   */
+  recoverExpiredLeases(options: { maxAttempts: number; all?: boolean }): number;
+  /** Reminder counts by state, plus how many are deliverable now. */
+  countReminders(): { byState: Record<ReminderState, number>; due: number };
 }
 
 export interface Storage
@@ -388,7 +395,8 @@ export interface Storage
     ProposalStore,
     ReminderStore,
     QuotaStore,
-    DeliveryRecordStore {
+    DeliveryRecordStore,
+    DeliveryLeaseStore {
   /** Throws if the database is unusable. */
   ping(): void;
   close(): void;
