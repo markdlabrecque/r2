@@ -1,0 +1,23 @@
+[Unit]
+Description=R2 private reminder service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=r2
+Group=r2
+WorkingDirectory=/opt/r2
+EnvironmentFile=/etc/r2/r2.env
+ExecStart=/usr/bin/node /opt/r2/dist/server/main.js
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/r2
+
+[Install]
+WantedBy=multi-user.target
