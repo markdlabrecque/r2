@@ -3,7 +3,6 @@
 declare const self: ServiceWorkerGlobalScope;
 
 const TITLE = 'You have an R2 reminder';
-const BODY = 'You have an R2 reminder';
 
 /** Only an opaque id is used, and only as a tag so a repeat of one reminder replaces itself. */
 function tagOf(event: PushEvent): string {
@@ -17,7 +16,7 @@ function tagOf(event: PushEvent): string {
 }
 
 self.addEventListener('push', (event) => {
-  event.waitUntil(self.registration.showNotification(TITLE, { body: BODY, tag: tagOf(event) }));
+  event.waitUntil(self.registration.showNotification(TITLE, { body: TITLE, tag: tagOf(event) }));
 });
 
 self.addEventListener('notificationclick', (event) => {
