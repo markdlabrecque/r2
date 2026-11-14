@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import {
   isValidTimezone,
   R2Error,
+  REMINDER_STATES,
   type Clock,
   type DeliveryAttempt,
   type DeliveryOutcome,
@@ -256,7 +257,7 @@ const hashToken = (token: string): string => createHash('sha256').update(token).
 
 // -------------------------------------------------------------------------------- storage
 
-/** The SQLite implementation of every storage interface except `DeliveryLeaseStore`. */
+/** The SQLite implementation of every storage interface. */
 export class SqliteStorage implements Storage {
   readonly db: Db;
   readonly #clock: Clock;
@@ -490,9 +491,130 @@ export class SqliteStorage implements Storage {
     return toAttempt(this.db.prepare('SELECT * FROM delivery_attempts WHERE id = ?').get(attemptId) as AttemptRow);
   }
 
+  settleDelivery(input: { attemptId: number; reminderId: string; claimToken: string; outcome: FinishedDeliveryOutcome; errorCode?: string | null; settlement: { state: 'accepted' } | { state: 'failed'; code: string } | { state: 'retry'; code: string; nextAttemptAt: number } }): boolean {
+    return this.db.transaction(() => {
+      const attempt = this.db.prepare("SELECT 1 FROM delivery_attempts WHERE id = ? AND reminder_id = ? AND claim_token = ? AND outcome = 'started'")
+        .get(input.attemptId, input.reminderId, input.claimToken);
+      if (attempt === undefined) return false;
+      const settlement = input.settlement;
+      const settled = settlement.state === 'accepted'
+        ? this.markAccepted(input.reminderId, input.claimToken)
+        : settlement.state === 'failed'
+          ? this.markFailed(input.reminderId, input.claimToken, settlement.code)
+          : this.scheduleRetry(input.reminderId, input.claimToken, settlement.nextAttemptAt, settlement.code);
+      if (!settled) return false;
+      this.finishDeliveryAttempt(input.attemptId, input.outcome, input.errorCode);
+      return true;
+    }).immediate();
+  }
+
   listDeliveryAttempts(reminderId: string): DeliveryAttempt[] {
     return (
       this.db.prepare('SELECT * FROM delivery_attempts WHERE reminder_id = ? ORDER BY attempt_number').all(reminderId) as AttemptRow[]
     ).map(toAttempt);
+  }
+
+  // delivery leases
+
+  claimDueReminders(options: { limit: number; leaseMs: number }): Reminder[] {
+    if (!Number.isInteger(options.limit) || options.limit < 1 || !(options.leaseMs > 0)) {
+      throw new R2Error('invalid_request', 'A claim needs a positive limit and lease.');
+    }
+    return this.db
+      .transaction((): Reminder[] => {
+        const now = this.#clock.now();
+        const rows = this.db
+          .prepare(
+            `SELECT id FROM reminders WHERE state IN ('scheduled', 'retry') AND next_attempt_at <= ?
+             ORDER BY due_at, created_at, id LIMIT ?`,
+          )
+          .all(now, options.limit) as { id: string }[];
+        return rows.map(({ id }) => {
+          this.db
+            .prepare(
+              `UPDATE reminders SET state = 'sending', attempts = attempts + 1, lease_until = ?, claim_token = ? WHERE id = ?`,
+            )
+            .run(now + options.leaseMs, randomBytes(16).toString('base64url'), id);
+          return toReminder(this.db.prepare('SELECT * FROM reminders WHERE id = ?').get(id) as ReminderRow);
+        });
+      })
+      .immediate();
+  }
+
+  #settle(reminderId: string, claimToken: string, set: string, ...values: (string | number | null)[]): boolean {
+    return (
+      this.db
+        .prepare(
+          `UPDATE reminders SET ${set}, lease_until = NULL, claim_token = NULL
+           WHERE id = ? AND state = 'sending' AND claim_token = ?`,
+        )
+        .run(...values, reminderId, claimToken).changes > 0
+    );
+  }
+
+  markAccepted(reminderId: string, claimToken: string): boolean {
+    return this.#settle(reminderId, claimToken, "state = 'accepted', accepted_at = ?, error_code = NULL", this.#clock.now());
+  }
+
+  scheduleRetry(reminderId: string, claimToken: string, nextAttemptAt: number, errorCode: string): boolean {
+    return this.#settle(reminderId, claimToken, "state = 'retry', next_attempt_at = ?, error_code = ?", nextAttemptAt, errorCode);
+  }
+
+  markFailed(reminderId: string, claimToken: string, errorCode: string): boolean {
+    return this.#settle(reminderId, claimToken, "state = 'failed', error_code = ?", errorCode);
+  }
+
+  recoverExpiredLeases(options: { maxAttempts: number; all?: boolean }): number {
+    return this.db
+      .transaction((): number => {
+        const now = this.#clock.now();
+        const rows = this.db
+          .prepare("SELECT id, attempts, claim_token FROM reminders WHERE state = 'sending' AND (? OR lease_until <= ?)")
+          .all(options.all === true ? 1 : 0, now) as { id: string; attempts: number; claim_token: string }[];
+        for (const row of rows) {
+          // Older builds could record acceptance before settling the reminder. Preserve that
+          // known outcome instead of sending a duplicate after an interrupted settlement.
+          const accepted = this.db.prepare("SELECT finished_at FROM delivery_attempts WHERE reminder_id = ? AND claim_token = ? AND outcome = 'accepted'")
+            .get(row.id, row.claim_token) as { finished_at: number } | undefined;
+          if (accepted !== undefined) {
+            this.db.prepare("UPDATE reminders SET state = 'accepted', accepted_at = ?, error_code = NULL, lease_until = NULL, claim_token = NULL WHERE id = ?")
+              .run(accepted.finished_at, row.id);
+            continue;
+          }
+          this.db
+            .prepare(
+              `UPDATE delivery_attempts SET outcome = 'unknown', error_code = 'interrupted', finished_at = ?
+               WHERE reminder_id = ? AND claim_token = ? AND outcome = 'started'`,
+            )
+            .run(now, row.id, row.claim_token);
+          if (row.attempts >= options.maxAttempts) {
+            this.db
+              .prepare("UPDATE reminders SET state = 'failed', error_code = 'interrupted', lease_until = NULL, claim_token = NULL WHERE id = ?")
+              .run(row.id);
+          } else {
+            this.db
+              .prepare(
+                "UPDATE reminders SET state = 'retry', next_attempt_at = ?, error_code = 'interrupted', lease_until = NULL, claim_token = NULL WHERE id = ?",
+              )
+              .run(now, row.id);
+          }
+        }
+        return rows.length;
+      })
+      .immediate();
+  }
+
+  countReminders(): { byState: Record<ReminderState, number>; due: number } {
+    const byState = Object.fromEntries(REMINDER_STATES.map((s) => [s, 0])) as Record<ReminderState, number>;
+    for (const row of this.db.prepare('SELECT state, COUNT(*) AS n FROM reminders GROUP BY state').all() as {
+      state: ReminderState;
+      n: number;
+    }[]) {
+      byState[row.state] = row.n;
+    }
+    const { due } = this.db
+      .prepare("SELECT COUNT(*) AS due FROM reminders WHERE state IN ('scheduled', 'retry') AND next_attempt_at <= ?")
+      .get(this.#clock.now()) as { due: number };
+    return { byState, due };
   }
 }

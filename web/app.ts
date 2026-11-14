@@ -25,6 +25,7 @@ async function api<T>(method: string, url: string, body?: unknown): Promise<T> {
   }
   const data = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
   if (!res.ok) {
+    if (res.status === 401) showSignedOut(true);
     throw { status: res.status, message: data.error?.message ?? 'The request failed.' } satisfies ApiError;
   }
   return data as T;
@@ -40,6 +41,12 @@ interface Settings {
 
 function showSignedOut(loginAvailable: boolean): void {
   $('owner').hidden = true;
+  $('reminders').replaceChildren();
+  $<HTMLInputElement>('message').value = '';
+  $('reply').textContent = '';
+  $('proposal-text').textContent = '';
+  $('proposal-when').textContent = '';
+  showProposal(undefined);
   $('login').hidden = !loginAvailable;
   $('status').textContent = loginAvailable
     ? 'Sign in to continue.'
@@ -53,12 +60,11 @@ async function showOwner(): Promise<void> {
   $<HTMLInputElement>('timezone').value = settings.timezone ?? '';
   $('status').textContent =
     settings.timezone === null ? 'Choose your timezone before creating reminders.' : `Signed in. Timezone: ${settings.timezone}.`;
-  await loadReminders().catch((e: unknown) => {
-    $('confirm-status').textContent = messageOf(e);
-  });
+  await updateReminders();
   await refreshPush().catch((e: unknown) => {
     $('push-state').textContent = messageOf(e);
   });
+  await updateStatus();
   const list = $('timezones');
   if (list.childElementCount === 0 && typeof Intl.supportedValuesOf === 'function') {
     for (const name of Intl.supportedValuesOf('timeZone')) {
@@ -92,6 +98,7 @@ interface ReminderItem {
   localDateTime: string;
   state: string;
   attempts: number;
+  nextAttemptAt: string;
   acceptedAt: string | null;
   errorCode: string | null;
   deliveryAttempts: { attemptNumber: number; outcome: string; errorCode: string | null }[];
@@ -121,6 +128,21 @@ const STATE_LABELS: Record<string, string> = {
   failed: 'Not sent',
 };
 
+const DELIVERY_REASONS: Record<string, string> = {
+  no_subscription: 'No browser is connected. Connect a browser; this reminder stays failed.',
+  subscription_gone: 'Browser subscription expired. Connect the browser again; this reminder stays failed.',
+  temporary: 'The push service is temporarily unavailable.',
+  network: 'The push service could not be reached.',
+  rejected: 'The push service rejected the notification.',
+  interrupted: 'Delivery was interrupted; the push may already have been accepted.',
+};
+
+function formatInstant(instant: string, timezone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(instant));
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')} ${timezone}`;
+}
+
 async function loadReminders(): Promise<void> {
   const { reminders } = await api<{ reminders: ReminderItem[] }>('GET', '/api/reminders');
   const list = $('reminders');
@@ -137,7 +159,8 @@ async function loadReminders(): Promise<void> {
       r.text,
       `due ${r.localDateTime.replace('T', ' ')} ${r.timezone}`,
       STATE_LABELS[r.state] ?? r.state,
-      ...(r.errorCode === null ? [] : [`reason: ${r.errorCode}`]),
+      ...(r.state === 'retry' ? [`next attempt: ${formatInstant(r.nextAttemptAt, r.timezone)}`] : []),
+      ...(r.errorCode === null ? [] : [DELIVERY_REASONS[r.errorCode] ?? `Delivery error: ${r.errorCode}`]),
       ...(outcome === undefined ? [] : [`attempts: ${r.attempts}, last outcome: ${outcome}`]),
     ];
     li.textContent = parts.join(' · ');
@@ -169,7 +192,7 @@ async function refreshPush(): Promise<void> {
   const status = await api<PushStatus>('GET', '/api/push');
   if (!status.configured) {
     connect.disabled = true;
-    state.textContent = 'Web Push is not configured on the server.';
+    state.textContent = 'Web Push is not configured on the server. Configure VAPID keys and restart before connecting a browser.';
     return;
   }
   if (!pushSupported()) {
@@ -188,10 +211,77 @@ async function refreshPush(): Promise<void> {
     state.textContent = `A browser is connected but has not passed a test notification yet.${paused}`;
     test.hidden = false;
   } else {
-    state.textContent = `A browser is connected and passed its test.${paused}`;
+    state.textContent = `A browser is connected and its test was accepted by the push service; this does not prove it displayed.${paused}`;
     test.hidden = false;
   }
 }
+
+interface ServiceStatus {
+  worker: { state: string };
+  notifications: { paused: boolean; pausedByConfig: boolean; pushConfigured: boolean };
+  assistantConfigured: boolean;
+  reminders: { byState: Record<string, number>; due: number };
+}
+
+async function refreshStatus(): Promise<void> {
+  const s = await api<ServiceStatus>('GET', '/api/status');
+  const toggle = $<HTMLButtonElement>('pause-toggle');
+  toggle.textContent = s.notifications.paused ? 'Resume notifications' : 'Pause notifications';
+  toggle.disabled = s.notifications.pausedByConfig;
+  const parts = [
+    s.worker.state === 'running' ? 'Delivery worker running.' : s.worker.state === 'failed' ? 'The delivery worker has failed.' : 'The delivery worker is stopped.',
+    s.assistantConfigured ? '' : 'The assistant is not configured. Saved reminders can still send.',
+    s.notifications.paused
+      ? s.notifications.pausedByConfig
+        ? 'Notifications are paused by server configuration.'
+        : 'Notifications are paused. Reminders stay saved and send, overdue, after you resume.'
+      : '',
+    `Waiting to send: ${s.reminders.due}. Not sent: ${s.reminders.byState['failed'] ?? 0}.`,
+  ];
+  $('service-state').textContent = parts.filter((p) => p !== '').join(' ');
+}
+
+$('pause-toggle').addEventListener('click', async () => {
+  const error = $('push-error');
+  error.textContent = '';
+  try {
+    const s = await api<ServiceStatus>('GET', '/api/status');
+    await api('PUT', '/api/notifications/pause', { paused: !s.notifications.paused });
+    await refreshStatus();
+  } catch (e) {
+    error.textContent = messageOf(e);
+  }
+});
+
+async function updateReminders(): Promise<void> {
+  try {
+    await loadReminders();
+    $('reminders-status').textContent = '';
+  } catch (e) {
+    $('reminders-status').textContent = `Could not refresh reminders: ${messageOf(e)}`;
+  }
+}
+
+async function updateStatus(): Promise<void> {
+  try {
+    await refreshStatus();
+  } catch (e) {
+    $('service-state').textContent = `Could not refresh delivery status: ${messageOf(e)}`;
+    $<HTMLButtonElement>('pause-toggle').disabled = true;
+  }
+}
+
+$('reminders-refresh').addEventListener('click', () => {
+  void updateReminders();
+  void updateStatus();
+});
+
+// Keep the list and delivery state current while the tab is open; delivery itself never needs the tab.
+setInterval(() => {
+  if ($('owner').hidden) return;
+  void updateReminders();
+  void updateStatus();
+}, 15_000);
 
 async function connectBrowser(): Promise<void> {
   const status = await api<PushStatus>('GET', '/api/push');
@@ -236,7 +326,7 @@ $('push-test').addEventListener('click', async () => {
   try {
     const result = await api<{ ok: boolean; code: string | null }>('POST', '/api/push/test');
     error.textContent = result.ok ? '' : (PUSH_FAILURES[result.code ?? ''] ?? 'The test notification failed.');
-    if (result.ok) $('push-state').textContent = 'Test notification sent. Check that this browser displayed it.';
+    if (result.ok) $('push-state').textContent = 'The push service accepted the test. Check that this browser displayed it; acceptance does not prove display.';
     else await refreshPush();
   } catch (e) {
     error.textContent = messageOf(e);
@@ -309,8 +399,8 @@ $('confirm').addEventListener('click', async () => {
     await api('POST', '/api/reminders/confirm', { proposalId: pending.proposal.id, requestId: pending.requestId });
     showProposal(undefined);
     $('reply').textContent = '';
-    status.textContent = 'Saved. The reminder is stored and will be sent when due.';
-    await loadReminders();
+    status.textContent = 'Saved. The reminder is stored for delivery when due.';
+    await updateReminders();
   } catch (e) {
     // Keep the proposal and request id so Save can be pressed again safely.
     status.textContent = `${messageOf(e)} Nothing is confirmed until this says Saved.`;
@@ -327,6 +417,7 @@ $('logout').addEventListener('click', async () => {
   try {
     await api('DELETE', '/api/session');
   } finally {
+    showSignedOut(true);
     await refresh();
   }
 });

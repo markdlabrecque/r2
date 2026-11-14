@@ -2,13 +2,13 @@
 
 Scope: owner login over Tailscale Serve HTTPS, timezone setting, one-browser Web Push, natural-language one-off reminders through chat, durable storage, and delivery after restart.
 
-## Gap to confirm first
+## Current coverage
 
-`src/` has no worker or scheduler file (`src/worker.ts` is absent) and the git log stops at #5 for application code. Reminders can be confirmed, stored and listed, but nothing appears to send them. Factory logs exist for tasks 7-10, but no merged commits. Part C applies once that work lands.
+The merged `spike-1` base includes `src/worker.ts`, worker tests, installation packaging and `browser/slice.spec.ts`. The browser delivery test restarts the real local service with the model disabled and checks submission to an injected push transport. It does not prove real notification delivery. Part C still requires the owner-run evidence described below.
 
 ## A. Automated
 
-Run under Node 24: `npm ci && npm run test:factory && npm run typecheck && npm run build && npm test`.
+Run under Node 24: `npm ci && npm run test:factory && npm run typecheck && npm run build && npm test && npm run test:browser`.
 
 Check that each PRD acceptance line maps to at least one test.
 
@@ -17,7 +17,7 @@ Gaps to add:
 - Duplicate confirm from two tabs.
 - Prompt injection in reminder text. The model has no tools, so check it can't alter the schema output.
 - Quota reset at the day boundary.
-- Push connection and delivery in Chromium. The browser test now covers login, timezone, chat, duplicate confirmation and restart persistence with a fake clock and model. It does not connect push or send notifications. Delivery coverage remains blocked on a scheduler.
+- Real push connection and delivery in Chromium. The browser suites cover login, timezone, chat, duplicate confirmation, restart persistence and worker submission with injected adapters. They do not connect a real push subscription or prove notification display.
 
 ## B. Manual, owner-run
 
@@ -33,7 +33,7 @@ Gaps to add:
 | 8 | Real OpenAI key, with model failing or key removed | Clear error, no save, no retry loop |
 | 9 | Restart the service | Reminder still listed, model disabled |
 
-## C. Delivery (needs the worker merged)
+## C. Delivery acceptance
 
 1. Reminder 2 minutes out, R2 tab closed: generic notification within 60 s of due.
 2. Stop the service across the due time, restart: one overdue delivery.
@@ -90,7 +90,7 @@ At that point, section A's DST edge cases, two-tab confirm, prompt injection, qu
 
 # Update: Chromium end-to-end test added (2026-11-14)
 
-Added `playwright.config.ts` and `e2e/reminder-flow.spec.ts`. `npm run test:browser` passes (1 test, ~1 s) under Node 24.20.0. CI now runs browser tests, because it keys on `playwright.config.ts`.
+At this historical checkpoint, added `playwright.config.ts` and `e2e/reminder-flow.spec.ts`. `npm run test:browser` passes (1 test, ~1 s) under Node 24.20.0. CI now runs browser tests, because it keys on `playwright.config.ts`.
 
 The test uses a fake clock and model with no real credentials. A temporary self-signed TLS proxy sits in front of the loopback service, so the browser sees the HTTPS origin the service requires. It covers:
 1. A wrong password is rejected.
@@ -108,7 +108,7 @@ Not covered:
 - **Two tabs:** the duplicate-save test uses one page, not independent tabs.
 - **Browser coverage:** Chromium only.
 
-# Consolidated verification (2026-11-14)
+# Historical consolidated verification (2026-11-14)
 
 Branch `chore/consolidation-baseline` starts at `e9b091a` and includes only the three handoff files plus the typecheck configuration change. No dirty Factory changes from the original checkout were copied.
 
@@ -128,3 +128,23 @@ Final checks under Node v24.20.0, after integrating both implementation commits:
 | `npm test` | 90 passed across 7 files, no skips |
 | `npm run test:browser` | 1 Chromium test passed |
 | `git diff --check` | Passed |
+
+# Merge-resolution verification
+
+Merged `origin/spike-1` at `97b1b58` into PR head `567ce05`. The only textual conflict was the add/add in `playwright.config.ts`: each branch selected a different browser test directory. The resolved configuration explicitly discovers both `e2e/**/*.spec.ts` and `browser/**/*.spec.ts`, keeps one worker and disables full parallelism. Typechecking now includes both directories and the Playwright configuration.
+
+`e2e/reminder-flow.spec.ts` is unchanged. It still sends two matching real save requests, asserts identical successful responses, and checks exactly one stored reminder with the returned ID before and after restart. The base's worker, browser delivery suite, packaging and Factory tooling are retained. No files were copied from the original dirty checkout.
+
+Checks under Node v24.20.0 after the merge resolution:
+
+| Check | Result |
+|---|---|
+| `npm ci` | Passed; install-script review warnings for better-sqlite3 and esbuild |
+| `npm run test:factory` | 7 passed |
+| `npm run typecheck` | Passed, including both browser suites and Playwright config |
+| `npm run build` | Passed |
+| `npm test` | 114 passed across 10 files, no skips |
+| `npm run test:browser` | 2 Chromium tests passed |
+| `git diff --check` and `git diff --cached --check` | Passed |
+
+Both browser suites use local services and synthetic adapters. Real push delivery, stock Firefox and Tailscale acceptance still require owner evidence.

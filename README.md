@@ -83,15 +83,30 @@ The database schema is `migrations/001.sql`. This unreleased build refuses an ol
 
 ## Private installation
 
-The packaging task will add the systemd unit, example application configuration, and owner-run Tailscale setup. R2 will bind to loopback behind Tailscale Serve with HTTPS. Tailnet access does not replace the owner login. No Funnel or public listener is in scope.
+See [private test-host installation](docs/private-installation.md) for the systemd service, configuration, Tailscale Serve, operations and owner-run checks. R2 binds to loopback behind private HTTPS. Tailnet access does not replace the owner login. No Funnel or public listener is in scope.
 
 ## Acceptance evidence
 
 The owner confirmed real generic test-notification delivery in Chromium and Zen Browser on the non-production Omarchy host. See [the verification record](docs/push-delivery-verification.md) for setup, fixes, and evidence limits. Scheduled reminder delivery and a persistent host installation are not claimed.
 
+### Full-slice verification
+
+Run `npm run build && npm run test:browser` for the Chromium integration test. It runs a local synthetic HTTPS proxy and file-backed SQLite, with an injected clock, interpreter, subscription and push transport. It checks login, explicit confirmation, restart, model-independent submission, and the authenticated outcome. It does **not** use a real browser push service or establish that a notification was displayed.
+
+The following owner-run gate remains **blocked / not yet evidenced**; the historical test notification above is not this acceptance test. On a non-production test host, follow [private installation](docs/private-installation.md), then:
+
+1. Record the reviewed commit, date, stock Firefox version and test-host/browser OS versions without recording the hostname, credentials, subscription or private reminder text. Verify Serve uses private HTTPS, not Funnel; confirm an outside-tailnet device is denied, and a tailnet device without an owner session cannot read reminders. Verify a second authorized owner device can use chat without replacing the notification subscription.
+2. In Firefox, sign in, choose an explicit IANA timezone, connect the browser and confirm a real test notification displays. Ask for a synthetic one-off reminder several minutes ahead and explicitly confirm the displayed date, time and timezone. Check it appears in the list.
+3. Before it is due, remove the OpenAI configuration from the protected environment file and restart R2. Confirm the saved reminder remains and the assistant is disabled. Close the R2 tab, keeping Firefox and its notification service running. Observe the actual desktop notification; verify that it contains only `You have an R2 reminder`, without reminder text or due time. Record due time and provider submission timing separately from desktop display timing; submission should occur within 60 seconds under normal conditions.
+4. Sign in again and verify the list retains the original local due time/timezone and provider outcome. Restart the test host and verify R2 and private Serve resume without public ports. Record pass/fail and any limitations; never include secrets, subscription data or private content in evidence. A provider acceptance or synthetic test alone is not proof of display.
+
 ### Browser notifications
 
-The owner connects one browser from the web app (Notifications section). The browser asks permission, registers `/sw.js`, subscribes with the server's VAPID public key, and R2 stores the subscription (a new one replaces the old). A test notification must be accepted by the push service before the browser is marked ready. Notifications show the generic title "You have an R2 reminder" and body "Open R2 and sign in to read it."; the push payload carries only an opaque id, never reminder text or due times. R2 contacts only reviewed push hosts (FCM, Mozilla, Apple, Windows), over HTTPS, and refuses private, loopback and tailnet addresses. Push acceptance is not proof the owner saw the notification. Automated tests use a fake push transport. The owner separately confirmed real delivery in Chromium and Zen Browser; stock Firefox has not been tested. Chromium delivery satisfies the owner's browser-delivery acceptance criterion.
+The owner connects one browser from the web app (Notifications section). The browser asks permission, registers `/sw.js`, subscribes with the server's VAPID public key, and R2 stores the subscription (a new one replaces the old). A test notification must be accepted by the push service before the browser is marked ready. Notifications show only the generic text "You have an R2 reminder" in both title and body; the push payload carries only an opaque id, never reminder text or due times. R2 contacts only reviewed push hosts (FCM, Mozilla, Apple, Windows), over HTTPS, and refuses private, loopback and tailnet addresses. Push acceptance is not proof the owner saw the notification. Automated tests use a fake push transport. The owner separately confirmed real delivery in Chromium and Zen Browser; stock Firefox has not been tested. Chromium delivery satisfies the owner's browser-delivery acceptance criterion.
+
+### Delivery worker
+
+One in-process worker polls SQLite every 5 seconds, so due pushes are submitted well inside 60 seconds. It never calls OpenAI: saved reminders send with the assistant disabled. Each due reminder is claimed in a transaction with a lease longer than the push deadline, and its attempt is recorded before the network call. At most four attempts are made, with 30 second, 2 minute and 10 minute waits after attempts 1 to 3; permanent errors (such as an expired subscription) fail at once. Attempt outcomes and reminder states are committed together. After a restart, an interrupted delivery is marked `unknown` and retried (or failed when its attempt limit is exhausted), so a crash can cause a duplicate push. A previously recorded acceptance is preserved. Every overdue reminder is sent after downtime, and the reminder list keeps the original due time and the provider outcome. Pausing (`R2_PAUSE_NOTIFICATIONS` or the Pause button) stops new claims; a push already in flight may still complete. Remaining reminders send, overdue, after resume. `GET /api/status` (owner only) shows worker state and counts; `/healthz` stays generic and reports 503 if the worker fails. Real browser delivery of a scheduled reminder with the tab closed still needs the owner's Firefox acceptance run.
 
 ### Owner password
 
