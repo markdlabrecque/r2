@@ -9,6 +9,7 @@ import type { ModelInterpreter } from '../src/contracts.ts';
 import { hashPassword } from '../src/password.ts';
 import { startService, type RunningService } from '../src/service.ts';
 import { FakeClock, syntheticEnv, tempDir } from '../tests/helpers.ts';
+import { createServerCleanup } from '../tests/server-cleanup.ts';
 
 const PASSWORD = 'correct horse battery staple';
 
@@ -23,7 +24,7 @@ class FakeModel implements ModelInterpreter {
 }
 
 /** TLS in front of the loopback service so the browser sees the https origin the service requires. */
-function tlsProxy(dir: string, target: () => number): Promise<Server> {
+function tlsProxy(dir: string, target: () => number): Promise<{ server: Server; close: () => Promise<void> }> {
   const key = join(dir, 'key.pem');
   const cert = join(dir, 'cert.pem');
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost'], { stdio: 'ignore' });
@@ -37,7 +38,8 @@ function tlsProxy(dir: string, target: () => number): Promise<Server> {
     });
     req.pipe(up);
   });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+  const close = createServerCleanup(server);
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, close })));
 }
 
 test('log in, set timezone, chat, double-save, restart: exactly one reminder persists', async ({ page }) => {
@@ -49,7 +51,7 @@ test('log in, set timezone, chat, double-save, restart: exactly one reminder per
   let svc: RunningService | undefined;
   let port = 0;
   const proxy = await tlsProxy(tmp.dir, () => port);
-  const origin = `https://localhost:${(proxy.address() as AddressInfo).port}`;
+  const origin = `https://localhost:${(proxy.server.address() as AddressInfo).port}`;
   const start = async () => {
     svc = await startService(syntheticEnv(dataDir, { R2_ORIGIN: origin, R2_PASSWORD_HASH: hash }), {
       clock,
@@ -137,7 +139,7 @@ test('log in, set timezone, chat, double-save, restart: exactly one reminder per
     await expect(page.locator('#login')).toBeVisible();
   } finally {
     await svc?.stop().catch(() => undefined);
-    proxy.close();
+    await proxy.close();
     tmp.cleanup();
   }
 });

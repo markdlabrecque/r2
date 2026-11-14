@@ -148,3 +148,31 @@ Checks under Node v24.20.0 after the merge resolution:
 | `git diff --check` and `git diff --cached --check` | Passed |
 
 Both browser suites use local services and synthetic adapters. Real push delivery, stock Firefox and Tailscale acceptance still require owner evidence.
+
+# CI timeout investigation
+
+Investigated CI run `43621890741` from PR head `0ebb8f67279bf19e936c34847e8cb11115b7f4b2` in an isolated checkout under Node v24.20.0. The original dirty checkout was not used or changed.
+
+The failed CI log reports an overall 60-second timeout in `browser/slice.spec.ts`, without a failing locator or stack. `gh-axi run download` reports no artifacts. The trace mentioned in the runner log was not uploaded, so the exact CI hanging step cannot be recovered from that run.
+
+Local repetition reproduced the same timeout. The retained trace shows all assertions, including model-free delivery and logout, completed about 6.4 seconds into the test. Temporary teardown steps isolated the wait to `proxy.close()`, not `service.stop()`. One instrumented run retained an established TLS socket with zero HTTP requests, zero application bytes read or written, and socket timeout `0` while proxy close was pending. A separate slow run spent 36.25 seconds in proxy close while service stop took less than a millisecond. These are test-proxy connections, not a stuck delivery worker or database shutdown.
+
+`server.close()` stops accepting connections but waits for these idle browser preconnections. The browser context normally closes after the test body returns; this test instead awaited proxy close inside its body. The e2e suite did not await proxy close at all, hiding the same cleanup risk.
+
+Both suites now register `createServerCleanup()` before listening. Teardown stops the listener, destroys tracked raw sockets, and awaits the close callback. Tracking raw connections also covers peers that never finish TLS. This is test-only cleanup; the application service lifecycle is unchanged. Named teardown steps remain in the delivery test for future traces.
+
+`tests/server-cleanup.test.ts` holds open real local TCP and TLS clients that never send HTTP. With socket destruction temporarily removed, both cases fail the one-second cleanup deadline. With the fix, both pass. No test timeout, retry policy, browser assertions, double-save request barrier, SQLite assertions, or Factory files were weakened or removed.
+
+Validation after the fix:
+
+| Check | Result |
+|---|---|
+| `npm run test:factory` | 7 passed |
+| `npm run typecheck` | Passed |
+| `npm run build` | Passed |
+| `npm test` | 116 passed across 11 files, no skips |
+| `npm run test:browser` | Both Chromium suites passed |
+| `npm run test:browser -- --repeat-each=10` | 20 passed; delivery runs 6.4–6.5 seconds |
+| `git diff --check` | Passed |
+
+Local diagnostic logs, red/green regression output and reproduced timeout traces are retained outside the repository at `/tmp/r2-pr23-evidence/`. They are local evidence, not recovered CI artifacts. Real notification delivery remains unverified.
