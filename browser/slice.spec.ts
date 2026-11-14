@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { hashPassword } from '../src/password.ts';
 import { startService, type RunningService } from '../src/service.ts';
 import { FakeClock } from '../tests/helpers.ts';
+import { createServerCleanup } from '../tests/server-cleanup.ts';
 
 test('confirmed reminder survives restart and is submitted without a model', async ({ page }) => {
   const dir = mkdtempSync(join(tmpdir(), 'r2-browser-'));
@@ -26,6 +27,7 @@ test('confirmed reminder survives restart and is submitted without a model', asy
     upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
     req.pipe(upstream);
   });
+  const closeProxy = createServerCleanup(proxy);
   await new Promise<void>((resolve) => proxy.listen(0, '127.0.0.1', resolve));
   const port = (proxy.address() as { port: number }).port;
   const origin = `https://127.0.0.1:${port}`;
@@ -68,8 +70,10 @@ test('confirmed reminder survives restart and is submitted without a model', asy
     await expect(newPage.locator('#owner')).toBeHidden();
     await expect(newPage.locator('#reminders')).toBeEmpty();
   } finally {
-    await service?.stop();
-    await new Promise<void>((resolve, reject) => proxy.close((err) => err ? reject(err) : resolve()));
+    await test.step('stop service', async () => { await service?.stop(); });
+    await test.step('close TLS proxy', async () => {
+      await closeProxy();
+    });
     rmSync(dir, { recursive: true, force: true });
   }
 });

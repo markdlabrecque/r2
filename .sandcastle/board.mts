@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { claimLive, keyFor, newToken, ownerOf, releaseClaim, transferClaim, withAdmission } from "./admission.mts";
 import type { AdmissionClaim, AdmissionTx, ClaimKind } from "./admission.mts";
 export { keyFor } from "./admission.mts";
+import { readAssessments, requestRefresh } from "./assessment.mts";
+import type { Assessment } from "./assessment.mts";
 
 // Run-state store + the Factory tracker board/evidence page (light/dark/system appearance).
 // Stage visits persist for real timing, blockers and bounce stats; legacy history stays explicitly incomplete.
@@ -28,6 +30,9 @@ export { keyFor } from "./admission.mts";
 // its ticket, a capacity slot and its whole project (no other run of the project is admitted, and it is refused while
 // another run of the project is in flight) whatever its record's stage or process, until the recovery launcher's settle
 // step releases it after the attempt's exact container is confirmed gone.
+// Each card also carries the ticket's current assessment (assessment.mts, #78), kept in its own files beside the run records.
+// Assessment reads are best-effort: a broken assessment directory must not break the historical board.
+// readRuns(dir, false) reads raw records without crash reconciliation, for strictly read-only refresh paths.
 // stateDir: $SANDCASTLE_STATE_DIR, else .sandcastle/state in the current repo. Set the variable to
 // one shared folder (the service's) so a single board shows runs from every project and worktree.
 
@@ -74,6 +79,7 @@ export interface BoardRun extends RunState {
   evidenceUrl?: string;
   activity?: string; // newest line of the agent's log, for a run that is in progress
   activityAt?: string; // when that log was last written
+  assessment?: Assessment; // the ticket as the tracker shows it now (assessment.mts, #78); never part of the run record
 }
 
 const expand = (p: string) => (p.startsWith("~/") ? resolve(homedir(), p.slice(2)) : resolve(p));
@@ -288,16 +294,16 @@ export function removeRun(iid: string, claim?: string): void {
   renderBoard();
 }
 
-/** Read every run. A run whose process is gone without a terminal stage crashed: mark it washed away. A reserved
- *  launch whose process died before the run started is removed instead, as if never launched. */
-export function readRuns(dir = stateDir()): BoardRun[] {
+/** Read every run. Normally reconcile crashed processes and drop dead unstarted reservations. Pass reconcile=false
+ *  for refresh: even a dead process's historical record must remain byte-for-byte untouched. */
+export function readRuns(dir = stateDir(), reconcile = true): BoardRun[] {
   if (!existsSync(dir)) return [];
   const runs: BoardRun[] = [];
   for (const f of readdirSync(dir).filter((n) => n.endsWith(".json"))) {
     try {
       const file = resolve(dir, f);
       let s: RunState = JSON.parse(readFileSync(file, "utf8"));
-      if (!TERMINAL.includes(s.stage) && !PARKED.includes(s.stage) && s.pid !== process.pid && !alive(s.pid)) {
+      if (reconcile && !TERMINAL.includes(s.stage) && !PARKED.includes(s.stage) && s.pid !== process.pid && !alive(s.pid)) {
         if (s.starting) {
           rmSync(file, { force: true });
           continue;
@@ -346,12 +352,21 @@ export function latestActivity(run: RunState): { activity: string; activityAt: s
 /** Board snapshot shared by the embedded page data and GET /api/runs. mode "http" links evidence through the
  *  service's /evidence route; "file" links the folder directly. */
 export function buildBoardData(mode: "file" | "http"): { runs: BoardRun[]; generatedAt: string } {
+  const assessments = readAssessments(stateDir());
   const runs = readRuns().map((r) => ({
     ...r,
+    assessment: assessments.get(r.key),
     evidenceUrl: !r.evidenceDir ? undefined : mode === "http" ? `/evidence/${encodeURIComponent(r.key)}/` : `file://${r.evidenceDir}/`,
     ...latestActivity(r),
   }));
   return { runs, generatedAt: now() };
+}
+
+/** Record a card refresh generation. The server starts its read-only worker separately. Reads and writes no run. */
+export function requestRefreshFor(key: string): void {
+  const run = readRuns(stateDir(), false).find((r) => r.key === key);
+  if (!run) throw new Error("not found");
+  requestRefresh(stateDir(), key, run.iid, run.project);
 }
 
 const embed = (data: unknown) =>

@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 //   Stored per ticket in a manifest, from the analysis run or reported by the implementer.
 // - conflict (undirected): two tickets whose file footprints overlap can't be live at the same time.
 //   Computed every dispatcher pass, never stored.
+// It also holds findJam, the rule for whether a project's queued work is jammed after a pass (slice four, #61).
 
 // Appended to every comment Sandcastle posts, so its own comments never change a ticket's hash.
 export const SANDCASTLE_MARK = "<!-- sandcastle -->";
@@ -231,7 +232,8 @@ export interface DecideInput {
   ignore?: string[];
 }
 
-export type Decision = { iid: number; launch: true } | { iid: number; launch: false; reason: string };
+// `waitingOn`: the unsatisfied prerequisites of a ticket held by a dependency (findJam reads it).
+export type Decision = { iid: number; launch: true } | { iid: number; launch: false; reason: string; waitingOn?: number[] };
 
 export function decide(input: DecideInput): { decisions: Decision[]; dropped: Edge[] } {
   const { kept, dropped } = breakCycles([...input.manifests.values()].flatMap(edgesOf));
@@ -243,7 +245,7 @@ export function decide(input: DecideInput): { decisions: Decision[]; dropped: Ed
     const open = kept.filter((e) => e.to === iid && !input.satisfied(e.from));
     if (open.length) {
       const why = open.map((e) => `#${e.from}${input.queue.has(e.from) ? "" : " (outside the agent queue)"}: ${e.what}`);
-      return { iid, launch: false, reason: `waiting on ${why.join("; ")}` };
+      return { iid, launch: false, reason: `waiting on ${why.join("; ")}`, waitingOn: [...new Set(open.map((e) => e.from))] };
     }
     const fp = m.actualFootprint ?? m.footprint;
     for (const l of live) {
@@ -256,6 +258,46 @@ export function decide(input: DecideInput): { decisions: Decision[]; dropped: Ed
     return { iid, launch: true };
   });
   return { decisions, dropped };
+}
+
+// ---- project jam ---------------------------------------------------------------
+// After a normal dispatcher pass: is this project's eligible queued work stuck with nothing moving it? (Slice four
+// self-recovery, #61.) Normal work always comes first, so there is no jam while any of the project's runs is in flight,
+// the pass launched something, a candidate still waits for analysis, or shared capacity has no free slot. Then the jam
+// is every still-ready ticket whose run stopped (its PR is not open), plus every candidate held only by dependencies that
+// are themselves in the jam (to any depth). A hold on a prerequisite outside the jam (outside the agent queue, with an
+// open PR, or progressing) is respected, never counted. Explicitly excluded tickets are not passed in.
+
+export interface JamInput {
+  /** Ready, not excluded work units, with their run record's stage (none: never ran) and whether that run's PR is open. */
+  units: { iid: number; stage?: string; openPr?: boolean }[];
+  decisions: Decision[];
+  /** This project's runs in flight. */
+  active: number[];
+  room: number;
+}
+export type Jam = { tickets: number[]; reasons: Record<number, string> } | { tickets: []; none: string };
+
+export function findJam(input: JamInput): Jam {
+  const none = (why: string): Jam => ({ tickets: [], none: why });
+  if (input.active.length) return none(`run(s) in flight: ${input.active.map((i) => `#${i}`).join(", ")}`);
+  if (input.decisions.some((d) => d.launch)) return none("this pass launched work");
+  if (input.decisions.some((d) => !d.launch && d.reason === "not analysed yet")) return none("tickets still wait for analysis");
+  if (input.room <= 0) return none("no free slot under the shared cap");
+  const reasons = new Map<number, string>();
+  for (const u of input.units) if (u.stage === "stopped" && !u.openPr) reasons.set(u.iid, "ready, but its run stopped");
+  const held = input.decisions.filter((d): d is Extract<Decision, { launch: false }> => !d.launch && !!d.waitingOn?.length);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const d of held) {
+      if (reasons.has(d.iid) || !d.waitingOn!.every((x) => reasons.has(x))) continue;
+      reasons.set(d.iid, d.reason);
+      grew = true;
+    }
+  }
+  if (!reasons.size) return none("no stuck work");
+  const tickets = [...reasons.keys()].sort((a, b) => a - b);
+  return { tickets, reasons: Object.fromEntries(tickets.map((t) => [t, reasons.get(t)!])) };
 }
 
 // ---- implementer reported a blocker --------------------------------------------

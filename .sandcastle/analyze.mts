@@ -14,7 +14,8 @@ import type { Ticket } from "./tracker.mts";
 // JSON schema. "pi": `pi -p` with read, grep, find and ls, no discovered extensions, skills or context files
 // (the pi-claude-subscription provider is the one extension loaded, by an explicit -e), and the JSON parsed
 // from its reply. Either way no shell, no writes and no MCP servers, because ticket
-// text is untrusted input.
+// text is untrusted input. Current-assessment analysis may also include previously named closed providers (#78),
+// without changing the open-provider validation used by execution/admission manifests.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const git = (args: string[], cwd?: string) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
@@ -135,6 +136,7 @@ export function analyse(args: {
   catalogue: Ticket[];
   manifests: Map<number, Manifest>;
   keepImplementerBlockers: boolean;
+  knownProviders?: Ticket[]; // assessment only: previously named dependencies can now be closed
 }): Manifest {
   const { ticket: t, catalogue: cat } = args;
   const vars: Record<string, string> = {
@@ -142,7 +144,10 @@ export function analyse(args: {
     ISSUE_TITLE: t.title,
     BASE_BRANCH: args.base,
     BASE_SHA: args.worktree.sha,
-    CATALOGUE: catalogueText(cat, args.manifests, t.iid),
+    CATALOGUE: [catalogueText(cat, args.manifests, t.iid), ...(args.knownProviders?.length ? [
+      "Previously named dependencies outside the open catalogue (closed is not proof of a merge or verification PASS):",
+      ...args.knownProviders.map((p) => `- #${p.iid} ${p.title} [${p.state}]: ${p.description}`),
+    ] : [])].join("\n"),
     TICKET: ticketText(t, args.notes),
   };
   // One pass, so placeholders inside ticket text are left alone.
@@ -150,8 +155,8 @@ export function analyse(args: {
 
   const so = AGENT.provider === "pi" ? runPi(t.iid, prompt, args.worktree.path) : runClaude(t.iid, prompt, args.worktree.path);
 
-  // Only open catalogue tickets can be providers; anything else the model names becomes unresolved.
-  const open = new Map(cat.map((c) => [c.iid, c]));
+  // Execution uses only the open catalogue. Read-only assessment can retain a known closed provider's identity.
+  const open = new Map([...cat, ...(args.knownProviders ?? [])].map((c) => [c.iid, c]));
   const requires = so.requires.map((r) => ({ ...r, providedBy: r.providedBy != null && r.providedBy !== t.iid && open.has(r.providedBy) ? r.providedBy : null }));
   const blockerHashes: Record<string, string> = {};
   for (const r of requires) {

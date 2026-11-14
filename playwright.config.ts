@@ -1,9 +1,11 @@
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
-  testDir: './browser',
-  workers: 1,
+  testDir: '.',
+  testMatch: ['e2e/**/*.spec.ts', 'browser/**/*.spec.ts'],
   timeout: 60_000,
-  reporter: 'list',
+  fullyParallel: false,
+  workers: 1,
+  reporter: [['list']],
   use: { browserName: 'chromium', ignoreHTTPSErrors: true, trace: 'retain-on-failure' },
 });

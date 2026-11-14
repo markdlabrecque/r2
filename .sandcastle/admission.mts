@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 //   mistaken for the owner) and, for recovery, the attempt's UUID. A normal claim lives while its owner does. A recovery
 //   claim is never released by its owner dying: only the recovery launcher's settle step releases it, after the
 //   attempt's exact container is confirmed gone (cli/src/recovery-run.mts).
-// - `generations`: per project, a counter that every normal admission increments. The jam detector compares it across
+// - `generations`: per project, a counter that every normal admission increments. The jam confirmation (#61, cli/src/jam-detect.mts) compares it across
 //   passes, so a normal launch breaks a pending jam confirmation (cli/src/recovery-state.mts).
 // - `recovery`: per project, the number of recovery attempts admitted and the admitted attempts whose charge has not yet
 //   been applied to the project's recovery record (`pending`). A recovery claim and its attempt charge are written in one
@@ -18,7 +18,8 @@ import { dirname, join } from "node:path";
 //   between the two writes is replayed later without charging twice or refunding (cli/src/recovery-claim.mts).
 // Every change runs under one short interprocess lock across all projects, `<stateDir>/admission/lock`, created complete
 // (written to a temp file, then hard-linked into place) and naming its holder's pid and start identity. It is taken over
-// only when that exact process is gone (the pid has exited, or now belongs to a process started at another time), never
+// only when that exact process is gone (the pid has exited, including an exited process its parent has not reaped, a
+// zombie, since #64; or the pid now belongs to a process started at another time), never
 // because of its age or a live pid alone. Writes are temp file, fsync, rename, fsync of the folder. A corrupt record or an
 // unknown version fails closed: nothing is claimed and the file is never overwritten. readAdmission never writes.
 // Import-safe and dependency-free apart from Node, so factory init copies it next to board.mts (cli/src/scaffold.mts).
@@ -70,18 +71,24 @@ function processGone(pid: number): boolean {
     return (e as NodeJS.ErrnoException).code === "ESRCH";
   }
 }
-/** When process `pid` started: a platform-specific string, null when no such process exists, undefined when it exists
- *  but its start cannot be read. */
+/** When process `pid` started: a platform-specific string, null when no such process exists or it has exited and is
+ *  only a zombie waiting for its parent to reap it (a crashed owner whose parent never reaps is gone, not running),
+ *  undefined when it exists but its start cannot be read. */
 export function processStart(pid: number): string | null | undefined {
   if (!Number.isInteger(pid) || pid <= 0 || processGone(pid)) return null;
   try {
-    // Linux: field 22 of /proc/<pid>/stat (clock ticks since boot), after the parenthesised command name.
+    // Linux: after the parenthesised command name, field 3 of /proc/<pid>/stat is the state and field 22 the start
+    // (clock ticks since boot).
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    return `linux:${stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]}`;
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    if (fields[0] === "Z" || fields[0] === "X") return null;
+    return `linux:${fields[19]}`;
   } catch {
     /* not Linux, or gone meanwhile */
   }
   if (process.platform === "linux") return processGone(pid) ? null : undefined;
+  const state = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+  if (state.status === 0 && state.stdout.trim().startsWith("Z")) return null;
   const r = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" });
   if (r.status === 0 && r.stdout.trim()) return `ps:${r.stdout.trim()}`;
   return processGone(pid) ? null : undefined;
