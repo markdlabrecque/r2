@@ -4,7 +4,7 @@ import { createServer as createHttpsServer, type Server } from 'node:https';
 import { request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Request } from '@playwright/test';
 import type { ModelInterpreter } from '../src/contracts.ts';
 import { hashPassword } from '../src/password.ts';
 import { startService, type RunningService } from '../src/service.ts';
@@ -40,7 +40,7 @@ function tlsProxy(dir: string, target: () => number): Promise<Server> {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
 
-test('log in, set timezone, chat, confirm, restart: the reminder survives', async ({ page }) => {
+test('log in, set timezone, chat, double-save, restart: exactly one reminder persists', async ({ page }) => {
   const tmp = tempDir();
   const model = new FakeModel();
   const clock = new FakeClock(); // 2026-10-14T12:00Z
@@ -89,7 +89,36 @@ test('log in, set timezone, chat, confirm, restart: the reminder survives', asyn
     await expect(page.locator('#proposal-when')).toContainText('2026-10-15 19:00 America/Toronto');
     await expect(page.locator('#reminders')).toContainText('No reminders yet');
 
-    await page.click('#confirm');
+    expect(svc!.storage.listReminders()).toHaveLength(0);
+
+    // Hold the first save until the second click sends its request. Neither
+    // response can hide the proposal before both real network writes exist.
+    const saves: Request[] = [];
+    let releaseSaves!: () => void;
+    const bothSavesReceived = new Promise<void>((resolve) => { releaseSaves = resolve; });
+    await page.route('**/api/reminders/confirm', async (route) => {
+      saves.push(route.request());
+      if (saves.length === 2) releaseSaves();
+      await bothSavesReceived;
+      await route.continue(); // No mocked response: both requests reach SQLite.
+    });
+    await page.locator('#confirm').dblclick();
+    await expect.poll(() => saves.length).toBe(2);
+    const firstSave = saves[0]!.postDataJSON();
+    expect(firstSave).toEqual({ proposalId: expect.any(String), requestId: expect.any(String) });
+    expect(firstSave.proposalId).not.toBe('');
+    expect(firstSave.requestId).not.toBe('');
+    expect(saves[1]!.postDataJSON()).toEqual(firstSave);
+    const responses = await Promise.all(saves.map((request) => request.response()));
+    for (const response of responses) expect(response?.status()).toBe(200);
+    const results = await Promise.all(responses.map((response) => response!.json()));
+    expect(results[1]).toEqual(results[0]);
+    const savedId = results[0].reminder.id;
+    expect(savedId).toEqual(expect.any(String));
+    expect(svc!.storage.listReminders()).toHaveLength(1);
+    expect(svc!.storage.listReminders()[0]!.id).toBe(savedId);
+    expect(model.calls).toEqual(['Remind me tomorrow', 'Take the bins out tomorrow at 7 pm']);
+
     await expect(page.locator('#confirm-status')).toContainText('Saved');
     await expect(page.locator('#reminders li')).toHaveCount(1);
     await expect(page.locator('#reminders')).toContainText('Take the bins out');
@@ -97,6 +126,8 @@ test('log in, set timezone, chat, confirm, restart: the reminder survives', asyn
     // Restart on the same data: session and reminder persist; the model is not needed to list.
     await svc!.stop();
     await start();
+    expect(svc!.storage.listReminders()).toHaveLength(1);
+    expect(svc!.storage.listReminders()[0]!.id).toBe(savedId);
     await page.reload();
     await expect(page.locator('#owner')).toBeVisible();
     await expect(page.locator('#reminders li')).toHaveCount(1);
