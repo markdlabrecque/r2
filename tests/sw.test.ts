@@ -40,6 +40,7 @@ describe('service worker', () => {
     expect(shown).toHaveLength(2);
     for (const n of shown) {
       expect(n.title).toBe('You have an R2 reminder');
+      expect(n.options.body).toBe('You have an R2 reminder');
       expect(JSON.stringify(n)).not.toMatch(/dentist|2026/);
     }
     expect(shown[0]!.options.tag).toBe('rem_abc');

@@ -491,6 +491,23 @@ export class SqliteStorage implements Storage {
     return toAttempt(this.db.prepare('SELECT * FROM delivery_attempts WHERE id = ?').get(attemptId) as AttemptRow);
   }
 
+  settleDelivery(input: { attemptId: number; reminderId: string; claimToken: string; outcome: FinishedDeliveryOutcome; errorCode?: string | null; settlement: { state: 'accepted' } | { state: 'failed'; code: string } | { state: 'retry'; code: string; nextAttemptAt: number } }): boolean {
+    return this.db.transaction(() => {
+      const attempt = this.db.prepare("SELECT 1 FROM delivery_attempts WHERE id = ? AND reminder_id = ? AND claim_token = ? AND outcome = 'started'")
+        .get(input.attemptId, input.reminderId, input.claimToken);
+      if (attempt === undefined) return false;
+      const settlement = input.settlement;
+      const settled = settlement.state === 'accepted'
+        ? this.markAccepted(input.reminderId, input.claimToken)
+        : settlement.state === 'failed'
+          ? this.markFailed(input.reminderId, input.claimToken, settlement.code)
+          : this.scheduleRetry(input.reminderId, input.claimToken, settlement.nextAttemptAt, settlement.code);
+      if (!settled) return false;
+      this.finishDeliveryAttempt(input.attemptId, input.outcome, input.errorCode);
+      return true;
+    }).immediate();
+  }
+
   listDeliveryAttempts(reminderId: string): DeliveryAttempt[] {
     return (
       this.db.prepare('SELECT * FROM delivery_attempts WHERE reminder_id = ? ORDER BY attempt_number').all(reminderId) as AttemptRow[]
@@ -555,6 +572,15 @@ export class SqliteStorage implements Storage {
           .prepare("SELECT id, attempts, claim_token FROM reminders WHERE state = 'sending' AND (? OR lease_until <= ?)")
           .all(options.all === true ? 1 : 0, now) as { id: string; attempts: number; claim_token: string }[];
         for (const row of rows) {
+          // Older builds could record acceptance before settling the reminder. Preserve that
+          // known outcome instead of sending a duplicate after an interrupted settlement.
+          const accepted = this.db.prepare("SELECT finished_at FROM delivery_attempts WHERE reminder_id = ? AND claim_token = ? AND outcome = 'accepted'")
+            .get(row.id, row.claim_token) as { finished_at: number } | undefined;
+          if (accepted !== undefined) {
+            this.db.prepare("UPDATE reminders SET state = 'accepted', accepted_at = ?, error_code = NULL, lease_until = NULL, claim_token = NULL WHERE id = ?")
+              .run(accepted.finished_at, row.id);
+            continue;
+          }
           this.db
             .prepare(
               `UPDATE delivery_attempts SET outcome = 'unknown', error_code = 'interrupted', finished_at = ?

@@ -365,6 +365,15 @@ export interface DeliveryRecordStore {
     errorCode?: string | null,
   ): DeliveryAttempt;
   listDeliveryAttempts(reminderId: string): DeliveryAttempt[];
+  /** Record the provider outcome and settle the claimed reminder in one transaction. */
+  settleDelivery(input: {
+    attemptId: number;
+    reminderId: string;
+    claimToken: string;
+    outcome: FinishedDeliveryOutcome;
+    errorCode?: string | null;
+    settlement: { state: 'accepted' } | { state: 'failed'; code: string } | { state: 'retry'; code: string; nextAttemptAt: number };
+  }): boolean;
 }
 
 /** Four total attempts per reminder, with these waits after attempts 1, 2 and 3. */
