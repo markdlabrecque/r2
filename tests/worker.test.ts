@@ -125,6 +125,33 @@ describe('delivery worker', () => {
     expect(s.storage.getReminder(r.id)?.state).toBe('accepted');
   });
 
+  it('stops claiming the backlog if paused while a push is in flight', async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const sending = new Promise<void>((resolve) => { started = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const sent: string[] = [];
+    const s = setup({ transport: { send: async (_sub, id) => {
+      sent.push(id);
+      started();
+      await gate;
+      return { outcome: 'accepted', httpStatus: 201 };
+    } } });
+    const first = s.remind('first', 1);
+    const second = s.remind('second', 2);
+    s.clock.advance(2);
+    const pass = s.worker.runOnce();
+    await sending;
+    s.storage.setNotificationsPaused(true);
+    release();
+    await pass;
+    expect(sent).toEqual([first.id]);
+    expect(s.storage.getReminder(second.id)?.state).toBe('scheduled');
+    s.storage.setNotificationsPaused(false);
+    await s.worker.runOnce();
+    expect(sent).toEqual([first.id, second.id]);
+  });
+
   it('keeps reminders waiting, not failed, without a browser or push configuration', async () => {
     const noBrowser = setup({ subscribe: false });
     const r1 = noBrowser.remind('x', 1);
@@ -146,6 +173,28 @@ describe('delivery worker', () => {
     const other = new DeliveryWorker({ storage: s.storage, clock: s.clock, pushTransport: s.transport });
     await Promise.all([s.worker.runOnce(), other.runOnce()]);
     expect(s.transport.sent).toHaveLength(1);
+  });
+
+  it.each([
+    { state: 'accepted', result: { outcome: 'accepted', httpStatus: 201 } },
+    { state: 'retry', result: { outcome: 'failed', retryable: true, code: 'temporary' } },
+    { state: 'failed', result: { outcome: 'failed', retryable: false, code: 'subscription_gone' } },
+  ] as const)('rolls back $state settlement when either database update fails', async ({ state, result }) => {
+    for (const failAttempt of [false, true]) {
+      const s = setup();
+      s.transport.results = [result];
+      const r = s.remind('x', 1);
+      s.clock.advance(1);
+      s.storage.db.exec(failAttempt
+        ? `CREATE TRIGGER fail_settlement BEFORE UPDATE OF outcome ON delivery_attempts
+           BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END`
+        : `CREATE TRIGGER fail_settlement BEFORE UPDATE OF state ON reminders
+           WHEN NEW.state = '${state}' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END`);
+      await s.worker.runOnce();
+      expect(s.worker.getStatus().state).toBe('failed');
+      expect(s.storage.getReminder(r.id)?.state).toBe('sending');
+      expect(s.storage.listDeliveryAttempts(r.id)[0]?.outcome).toBe('started');
+    }
   });
 
   it('records a thrown transport as unknown and retries it', async () => {
@@ -190,6 +239,18 @@ describe('crash recovery', () => {
     await new DeliveryWorker({ storage: s.storage, clock: s.clock, pushTransport: s.transport }).runOnce();
     expect(s.storage.getReminder(r.id)?.state).toBe('accepted');
     expect(s.storage.listDeliveryAttempts(r.id).map((a) => a.outcome)).toEqual(['unknown', 'accepted']);
+  });
+
+  it('preserves a recorded provider acceptance if the process dies before settling the reminder', async () => {
+    const s = setup();
+    const r = crashed(s.storage, s.clock);
+    const attempt = s.storage.listDeliveryAttempts(r.id)[0]!;
+    s.storage.finishDeliveryAttempt(attempt.id, 'accepted');
+    await s.worker.start();
+    await s.worker.stop();
+    expect(s.storage.getReminder(r.id)).toMatchObject({ state: 'accepted', attempts: 1 });
+    await new DeliveryWorker({ storage: s.storage, clock: s.clock, pushTransport: s.transport }).runOnce();
+    expect(s.transport.sent).toEqual([]);
   });
 
   it('recovers an expired lease while running, and fails it once attempts are used up', async () => {

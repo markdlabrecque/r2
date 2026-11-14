@@ -147,6 +147,8 @@ export class DeliveryWorker implements Worker {
       // Paused or unconfigured: leave reminders scheduled. They send, still overdue, once resumed.
       if (transport !== undefined && !this.isPaused() && this.#storage.getSubscription() !== undefined) {
         for (let i = 0; i < MAX_PER_PASS && !this.#stopRequested; i++) {
+          // A pause may have been requested while the previous push was in flight.
+          if (this.isPaused()) break;
           const [reminder] = this.#storage.claimDueReminders({ limit: 1, leaseMs: this.#leaseMs });
           if (reminder === undefined) break;
           await this.#deliver(reminder, transport);
@@ -182,20 +184,19 @@ export class DeliveryWorker implements Worker {
     }
     const attemptNumber = reminder.attempts;
     if (result?.outcome === 'accepted') {
-      this.#storage.finishDeliveryAttempt(attempt.id, 'accepted');
-      const settled = this.#storage.markAccepted(reminder.id, claimToken);
+      const settled = this.#storage.settleDelivery({ attemptId: attempt.id, reminderId: reminder.id, claimToken, outcome: 'accepted', settlement: { state: 'accepted' } });
       this.#log.info({ reminderId: reminder.id, attempt: attemptNumber, settled }, 'push accepted');
       return;
     }
     const code = result?.outcome === 'failed' ? result.code : 'network';
     const retryable = result === undefined ? true : result.outcome === 'failed' && result.retryable;
-    this.#storage.finishDeliveryAttempt(attempt.id, result === undefined ? 'unknown' : 'failed', code);
+    const outcome = result === undefined ? 'unknown' : 'failed';
     const delay = DELIVERY_RETRY_DELAYS_MS[attemptNumber - 1];
     if (retryable && attemptNumber < MAX_DELIVERY_ATTEMPTS && delay !== undefined) {
-      this.#storage.scheduleRetry(reminder.id, claimToken, this.#clock.now() + delay, code);
+      this.#storage.settleDelivery({ attemptId: attempt.id, reminderId: reminder.id, claimToken, outcome, errorCode: code, settlement: { state: 'retry', nextAttemptAt: this.#clock.now() + delay, code } });
       this.#log.warn({ reminderId: reminder.id, attempt: attemptNumber, code, retryInMs: delay }, 'push failed; retry scheduled');
     } else {
-      this.#storage.markFailed(reminder.id, claimToken, code);
+      this.#storage.settleDelivery({ attemptId: attempt.id, reminderId: reminder.id, claimToken, outcome, errorCode: code, settlement: { state: 'failed', code } });
       this.#log.warn({ reminderId: reminder.id, attempt: attemptNumber, code }, 'push failed permanently');
     }
   }
