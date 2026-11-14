@@ -83,7 +83,7 @@ The database schema is `migrations/001.sql`. This unreleased build refuses an ol
 
 ## Private installation
 
-The packaging task will add the systemd unit, example application configuration, and owner-run Tailscale setup. R2 will bind to loopback behind Tailscale Serve with HTTPS. Tailnet access does not replace the owner login. No Funnel or public listener is in scope.
+See [private test-host installation](docs/private-installation.md) for the systemd service, configuration, Tailscale Serve, operations and owner-run checks. R2 binds to loopback behind private HTTPS. Tailnet access does not replace the owner login. No Funnel or public listener is in scope.
 
 ## Acceptance evidence
 
