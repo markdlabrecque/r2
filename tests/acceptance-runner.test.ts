@@ -58,6 +58,7 @@ async function setup(initialPause = false) {
     if (r.executable === '/usr/bin/node') return ok('v24.20.0\n');
     if (r.executable === '/usr/bin/ss') return ok(active ? 'LISTEN 0 511 127.0.0.1:3000 0.0.0.0:* users:(("node",pid=123,fd=20))\n' : '');
     if (r.executable === '/usr/bin/timedatectl') return ok('yes\n');
+    if (r.executable === '/usr/bin/tailscale' && r.args[0] === 'status') return ok(JSON.stringify({ BackendState: 'Running', Self: { DNSName: 'test.synthetic.ts.net.' } }));
     if (r.executable === '/usr/bin/tailscale') return ok(JSON.stringify({ TCP: { '443': { HTTPS: true } }, Web: { 'test.synthetic.ts.net:443': { Handlers: { '/': { Proxy: 'http://127.0.0.1:3000' } } } } }));
     if (r.executable === '/usr/bin/curl') return ok(healthy ? '{"status":"ok"}' : '{"status":"error"}');
     throw Error('unexpected synthetic command');

@@ -85,7 +85,7 @@ The database schema is `migrations/001.sql`. This unreleased build refuses an ol
 
 ## Private installation
 
-See [private test-host installation](docs/private-installation.md) for the systemd service, configuration, Tailscale Serve, operations and owner-run checks. R2 binds to loopback behind private HTTPS. Tailnet access does not replace the owner login. No Funnel or public listener is in scope.
+See [private test-host installation](docs/private-installation.md) for the systemd service, configuration, Tailscale Serve, operations and owner-run checks. The [automated acceptance runbook](docs/automated-acceptance.md) describes opt-in tooling and its human evidence gates. R2 binds to loopback behind private HTTPS. Tailnet access does not replace the owner login. No Funnel or public listener is in scope.
 
 ## Acceptance evidence
 

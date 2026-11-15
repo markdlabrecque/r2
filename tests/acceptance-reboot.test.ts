@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { expect, it } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
 import { AcceptanceReboot, type RebootOptions } from '../scripts/acceptance/reboot.ts';
 import { AcceptanceHost } from '../scripts/acceptance/host.ts';
 import { classifyOwner, validateJournal } from '../scripts/acceptance/contracts.ts';
 import { jsonReport, projectReport } from '../scripts/acceptance/report.ts';
-import { rebootFixture } from './acceptance-reboot-fixture.ts';
+import { cleanupRebootFixtures, rebootFixture } from './acceptance-reboot-fixture.ts';
+
+afterEach(cleanupRebootFixtures);
 
 async function setup(paused = false) {
   const x = await rebootFixture(paused);
@@ -98,6 +100,31 @@ it('declined case preparation cannot hide reboot checks by later running ordinar
   expect(result.overall).toBe('blocked');
   expect(result.checks.filter(c => c.id.startsWith('reboot-')).every(c => c.required)).toBe(true);
   expect(() => x.edit(s => { delete s.coordinator!.rebootSelected; })).toThrow();
+});
+
+it.each(['before', 'create-case', 'confirm-case', 'instructions', 'approval'])('cancellation at %s never invokes reboot and retains safe state', async point => {
+  const x = await setup(); const controller = new AbortController();
+  if (point === 'before') controller.abort();
+  x.prompt(async r => { if (r.id === (point === 'approval' ? 'reboot' : point)) controller.abort(); return 'approved'; });
+  const r = x.reboot({ signal: controller.signal, ...(point === 'instructions' ? { acknowledgeResume: async () => { controller.abort(); return 'approved'; } } : {}) });
+  await expect(r.prepare()).rejects.toThrow();
+  expect(x.commands).not.toContain('reboot');
+  expect(x.lease.load().cleanup.status).toBe('verified');
+  expect(x.model()).toBe(true);
+});
+
+it('cancellation immediately after durable reboot intent does not issue the reboot command', async () => {
+  const x = await setup(); const controller = new AbortController();
+  const original = x.lease.beginMutation.bind(x.lease);
+  x.lease.beginMutation = (input, seq) => {
+    const result = original(input, seq);
+    if (result.operation === 'reboot') controller.abort();
+    return result;
+  };
+  await expect(x.reboot({ signal: controller.signal }).prepare()).rejects.toThrow();
+  expect(x.commands).not.toContain('reboot');
+  expect(x.lease.load().pending?.operation).toBe('reboot');
+  expect(x.lease.load().cleanup.status).toBe('verified');
 });
 
 it('same boot cannot become reboot acceptance or repeat a reboot', async () => {

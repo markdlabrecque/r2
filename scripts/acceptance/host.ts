@@ -218,18 +218,28 @@ export class AcceptanceHost {
       const listener = loopbackOnly ? 'loopback-only' : listeners.length === 0 ? 'absent' : 'unsafe';
       const clock = await this.command('/usr/bin/timedatectl', ['show', '--property=NTPSynchronized', '--value']);
       if (!['yes\n', 'no\n'].includes(clock)) fail('unsafe-installation');
-      const serve = JSON.parse(await this.command('/usr/bin/tailscale', ['serve', 'status', '--json'])) as Record<string, unknown>;
-      const { TCP, Web, AllowFunnel, ...extra } = serve;
-      if (Object.keys(extra).length || JSON.stringify(TCP) !== '{"443":{"HTTPS":true}}' || typeof Web !== 'object' || !Web || Object.keys(Web).length !== 1) fail('unsafe-installation');
-      const [name, web] = Object.entries(Web as Record<string, unknown>)[0]!;
-      if (!/^[a-z0-9][a-z0-9.-]*\.ts\.net:443$/.test(name) || JSON.stringify(web) !== '{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}' ||
-        (AllowFunnel !== undefined && (typeof AllowFunnel !== 'object' || AllowFunnel === null || Object.values(AllowFunnel as Record<string, unknown>).some(v => v !== false)))) fail('unsafe-installation');
+      await this.privateOrigin();
       const healthy = unit.ActiveState === 'active' ? await this.health() : false;
       const active = unit.ActiveState === 'active', enabled = unit.UnitFileState === 'enabled';
       return { installation, layout: 'supported', runtime: { executable: '/usr/bin/node', version }, active, enabled,
         permissions: 'restrictive', healthy, loopbackOnly, listener, synchronizedClock: clock === 'yes\n', privateHttps: true,
         ready: active && enabled && healthy && loopbackOnly && clock === 'yes\n' };
     } catch (e) { if (e instanceof HostError) throw e; return fail('unsafe-installation'); }
+  }
+  /** Runtime-only origin derived from the validated local Serve configuration. Never persist or report it. */
+  async privateOrigin(): Promise<string> {
+    try {
+      const serve = JSON.parse(await this.command('/usr/bin/tailscale', ['serve', 'status', '--json'])) as Record<string, unknown>;
+      const { TCP, Web, AllowFunnel, ...extra } = serve;
+      if (Object.keys(extra).length || JSON.stringify(TCP) !== '{"443":{"HTTPS":true}}' || typeof Web !== 'object' || !Web || Object.keys(Web).length !== 1) fail('unsafe-installation');
+      const [name, web] = Object.entries(Web as Record<string, unknown>)[0]!;
+      if (!/^[a-z0-9][a-z0-9.-]*\.ts\.net:443$/.test(name) || JSON.stringify(web) !== '{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}}' ||
+        (AllowFunnel !== undefined && (typeof AllowFunnel !== 'object' || AllowFunnel === null || Object.values(AllowFunnel as Record<string, unknown>).some(v => v !== false)))) fail('unsafe-installation');
+      const status = JSON.parse(await this.command('/usr/bin/tailscale', ['status', '--json'])) as { BackendState?: unknown; Self?: { DNSName?: unknown } };
+      const hostname = name.slice(0, -4);
+      if (status.BackendState !== 'Running' || status.Self?.DNSName !== `${hostname}.`) fail('unsafe-installation');
+      return `https://${hostname}`;
+    } catch { return fail('unsafe-installation'); }
   }
   /** Stable installed binding, independent of whether automatic service/Serve recovery succeeded. */
   identity(): Installation {
