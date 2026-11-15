@@ -268,10 +268,14 @@ export class AcceptanceHost {
     return this.exclusive(lease, async () => {
       if (!['restart', 'stop', 'start', 'disable-model'].includes(operation)) fail('unauthorized');
       const s = this.authorize(lease, authority, operation); this.bound(s);
-      if (s.pending || s.cleanup.artifacts.length || s.cleanup.daemonReloadNeeded || s.cleanup.pauseRestoreNeeded ||
-        (operation === 'start' ? !s.cleanup.serviceRestoreNeeded || s.cleanup.status !== 'restore-needed' : s.cleanup.status !== 'verified')) fail('recovery-required');
+      // API pause restoration is independent of owned host restoration. Never clear it here.
+      const stoppedDisable = operation === 'disable-model' && s.cleanup.serviceRestoreNeeded && s.cleanup.status === 'restore-needed';
+      const pauseOnly = s.cleanup.pauseRestoreNeeded && !s.cleanup.serviceRestoreNeeded && s.cleanup.status === 'restore-needed';
+      if (s.pending || s.cleanup.artifacts.length || s.cleanup.daemonReloadNeeded ||
+        (operation === 'start' ? !s.cleanup.serviceRestoreNeeded || s.cleanup.status !== 'restore-needed'
+          : !stoppedDisable && s.cleanup.status !== 'verified' && !pauseOnly)) fail('recovery-required');
       const facts = await this.inspect();
-      if (operation === 'start' ? facts.active || !facts.enabled || !facts.synchronizedClock || facts.listener !== 'absent' : !facts.ready) fail('unsafe-installation');
+      if (operation === 'start' || stoppedDisable ? facts.active || !facts.enabled || !facts.synchronizedClock || facts.listener !== 'absent' : !facts.ready) fail('unsafe-installation');
       const id = randomUUID();
       const contents: Record<Kind, string> = {
         'model-environment': `# R2 acceptance ${s.runId} ${id}\nOPENAI_API_KEY=\nOPENAI_MODEL=\n`,
@@ -312,10 +316,10 @@ export class AcceptanceHost {
           await this.unit(true); // Confirm EnvironmentFile append order before restart.
         }
         this.effect(lease); this.boundary('before-service');
-        await this.system(operation === 'disable-model' ? 'restart' : operation); this.boundary('after-service');
+        await this.system(operation === 'disable-model' ? stoppedDisable ? 'start' : 'restart' : operation); this.boundary('after-service');
         const actual = await this.unit(operation === 'disable-model');
         if (operation === 'stop' ? actual.ActiveState !== 'inactive' : actual.ActiveState !== 'active' || !await this.health()) fail('operation-failed');
-        if (operation === 'restart' || operation === 'start') this.update(lease, next => { next.cleanup.serviceRestoreNeeded = false; next.cleanup.status = 'verified'; });
+        if (operation === 'restart' || operation === 'start') this.update(lease, next => { next.cleanup.serviceRestoreNeeded = false; next.cleanup.status = next.cleanup.pauseRestoreNeeded ? 'restore-needed' : 'verified'; });
         this.resolve(lease);
       } catch (error) {
         // Never race rollback against an executor that has not acknowledged cancellation.

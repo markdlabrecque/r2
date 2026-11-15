@@ -23,6 +23,7 @@ export const checkIds = [
   'a-retained', 'a-model-disabled', 'a-provider', 'a-observed', 'a-timing',
   'b-retained', 'b-provider', 'b-observed', 'c-pause-retained', 'c-no-attempt', 'c-provider', 'c-observed',
   'second-device', 'recipient-unchanged', 'signed-out-denied', 'outside-tailnet-denied', 'excluded-client-denied',
+  'coordination', 'model-enabled', 'b-model-disabled', 'c-retained', 'tabs-closed', 'second-device-observed', 'origin-rejected',
   'reboot-changed', 'reboot-automatic-recovery', 'reboot-retained', 'reboot-provider', 'reboot-observed', 'cleanup',
 ] as const;
 export type CheckId = typeof checkIds[number];
@@ -34,7 +35,7 @@ export const checkSchema = z.strictObject({
 }).superRefine((c, ctx) => {
   const human = ['firefox-permission', 'test-observed', 'generic-wording', 'click-through', 'a-observed',
     'b-observed', 'c-observed', 'second-device', 'signed-out-denied', 'outside-tailnet-denied',
-    'excluded-client-denied', 'reboot-observed'].includes(c.id);
+    'excluded-client-denied', 'reboot-observed', 'tabs-closed', 'second-device-observed'].includes(c.id);
   if (human && c.provenance !== 'owner-reported') ctx.addIssue({ code: 'custom', message: 'Invalid evidence.' });
   if (c.status === 'pass' && c.reason !== 'verified') ctx.addIssue({ code: 'custom', message: 'Invalid evidence.' });
 });
@@ -86,6 +87,7 @@ export const journalSchema = z.strictObject({
   installation: installationSchema, priorBootId: idSchema, stage: z.enum(stages), createdAt: instantSchema, updatedAt: instantSchema,
   optionalChecks: z.array(z.enum(checkIds)).max(checkIds.length), checks: z.array(checkSchema).max(checkIds.length),
   cases: z.array(caseSchema).max(32), cleanup: cleanupSchema, pending: intentSchema.nullable(), reboot: rebootSchema.nullable(),
+  coordinator: z.strictObject({ completed: z.array(z.enum(stages)).max(stages.length), active: z.enum(stages).nullable() }).optional(),
 }).superRefine((s, ctx) => {
   for (const values of [s.checks.map(c => c.id), s.cases.map(c => `${c.label}-${c.caseNumber}`), s.cases.map(c => c.requestId), s.optionalChecks]) {
     if (new Set(values).size !== values.length) ctx.addIssue({ code: 'custom', message: 'Duplicate entry.' });
@@ -94,6 +96,8 @@ export const journalSchema = z.strictObject({
     s.pending.caseRequestId !== null && !s.cases.some(c => c.requestId === s.pending!.caseRequestId && c.label === s.pending!.caseLabel))) {
     ctx.addIssue({ code: 'custom', message: 'Invalid intent.' });
   }
+  if (s.coordinator && (new Set(s.coordinator.completed).size !== s.coordinator.completed.length ||
+    s.coordinator.active !== null && s.coordinator.completed.includes(s.coordinator.active))) ctx.addIssue({ code: 'custom', message: 'Invalid progress.' });
   // These safety/evidence gates cannot be made optional.
   if (s.optionalChecks.some(c => !c.startsWith('reboot-'))) ctx.addIssue({ code: 'custom', message: 'Required check.' });
   if (s.reboot && (!s.cases.some(c => c.label === 'reboot' && c.requestId === s.reboot!.caseRequestId && c.reminderId !== null) ||
