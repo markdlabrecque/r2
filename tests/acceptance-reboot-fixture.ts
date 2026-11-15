@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import { join, dirname } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { classifyOwner } from '../scripts/acceptance/contracts.ts';
-import { afterEach } from 'vitest';
 import { generateVAPIDKeys } from 'web-push';
 import { AcceptanceRunner, type RunnerOptions, type RunnerPrompt } from '../scripts/acceptance/runner.ts';
 import { AcceptanceApi } from '../scripts/acceptance/api.ts';
@@ -22,7 +21,7 @@ import { FakeClock, syntheticEnv, tempDir } from './helpers.ts';
 import { fixture } from './acceptance-fixtures.ts';
 
 const cleanups: (() => void | Promise<void>)[] = [];
-afterEach(async () => { for (const c of cleanups.splice(0).reverse()) await c(); });
+export async function cleanupRebootFixtures() { for (const c of cleanups.splice(0).reverse()) await c(); }
 const vapid = generateVAPIDKeys();
 export async function rebootFixture(initialPause = false) {
   let writeFault: ((boundary: string) => void) | undefined;
@@ -60,7 +59,7 @@ export async function rebootFixture(initialPause = false) {
     if (r.executable === '/usr/bin/node') return ok('v24.20.0\n');
     if (r.executable === '/usr/bin/ss') return ok(active ? 'LISTEN 0 511 127.0.0.1:3000 0.0.0.0:* users:(("node",pid=123,fd=20))\n' : '');
     if (r.executable === '/usr/bin/timedatectl') return ok('yes\n');
-    if (r.executable === '/usr/bin/tailscale' && r.args[0] === 'status') return ok('{"BackendState":"Running"}');
+    if (r.executable === '/usr/bin/tailscale' && r.args[0] === 'status') return ok('{"BackendState":"Running","Self":{"DNSName":"test.synthetic.ts.net."}}');
     if (r.executable === '/usr/bin/tailscale') return ok(JSON.stringify({ TCP: { '443': { HTTPS: true } }, Web: { 'test.synthetic.ts.net:443': { Handlers: { '/': { Proxy: 'http://127.0.0.1:3000' } } } } }));
     if (r.executable === '/usr/bin/curl') return ok(healthy ? '{"status":"ok"}' : '{"status":"error"}');
     throw Error('unexpected synthetic command');

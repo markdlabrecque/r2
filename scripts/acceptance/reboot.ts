@@ -14,6 +14,8 @@ export class RebootError extends Error {
 export interface RebootOptions extends RunnerOptions {
   host: Pick<AcceptanceHost, 'inspect' | 'operate' | 'recover' | 'bootId' | 'identity' | 'inspectBoot' | 'reboot'>;
   rebootCapability: boolean;
+  /** Stops new reboot work after process interruption; cleanup remains independently available. */
+  signal?: AbortSignal;
   /** Actual caller terminal fact, not a flag or a persisted approval. */
   interactive: () => boolean;
   /** Render the exact manual resume invocation for this run using the future CLI's syntax.
@@ -47,7 +49,7 @@ export class AcceptanceReboot {
   private gate() {
     // load proves current exclusive lock ownership, including after a verified stale takeover.
     const s = this.state();
-    if (this.o.mode !== 'non-production-live' || !this.o.rebootCapability || !this.o.hostDisruption || !this.o.interactive()) throw new RebootError('unauthorized');
+    if (this.o.signal?.aborted || this.o.mode !== 'non-production-live' || !this.o.rebootCapability || !this.o.hostDisruption || !this.o.interactive()) throw new RebootError('unauthorized');
     const boot = idSchema.safeParse(this.o.host.bootId());
     if (!boot.success) throw new RebootError('unsafe-installation');
     if (this.o.lease.owner.bootId !== boot.data) throw new RebootError('conflict');
@@ -82,9 +84,11 @@ export class AcceptanceReboot {
           if (!settings.timezone) throw new RebootError('unsafe-installation');
           const plan = makeCase('reboot', 1, settings.timezone, this.o.clock.now(), this.o.leadMs ?? 600_000);
           await this.approve('create-case', 'Spend model quota for one reboot case? Explicit save creates a permanent synthetic reminder with no cancellation route. Browser setup will not change.', plan.record);
+          this.gate();
           const cases = new AcceptanceCases(this.o.api, this.o.lease, this.o.clock);
           if (await cases.propose(plan) !== 'proposed') throw new RebootError('operation-failed');
           await this.approve('confirm-case', 'Save this reboot proposal at its original due time? Allow enough time to reboot and manually resume. No due time will be moved.', plan.record);
+          this.gate();
           await cases.confirm(plan.record.requestId);
           c = this.state().cases.find(c => c.requestId === plan.record.requestId)!;
         }
@@ -110,6 +114,7 @@ export class AcceptanceReboot {
             stage: 'reboot' as const, at: this.o.clock.now(), caseLabel: 'reboot' as const, caseRequestId: c.requestId } };
         this.o.lease.beginMutation(next, s.sequence);
         try {
+          if (this.o.signal?.aborted) throw new RebootError('unavailable');
           await this.o.host.reboot(this.o.lease, { nonProduction: true, hostDisruption: true,
             approval: { runId: s.runId, stage: 'reboot', operation: 'reboot', outcome: 'approved' } });
         } catch {
@@ -141,6 +146,7 @@ export class AcceptanceReboot {
           if (!row || !retained(c, row)) throw new RebootError('conflict');
         }
         if (!this.state().checks.some(c => c.id === 'reboot-provider' && c.status === 'pass')) {
+          this.gate();
           await enableNotifications();
           const result = await this.session(() => pollReminder(this.o.api, c.reminderId!, this.o.clock, this.o.wait,
             Math.max(c.dueAt, this.o.clock.now()) + (this.o.providerWindowMs ?? 120_000), 1000));

@@ -183,7 +183,7 @@ export class AcceptanceRunner {
     const facts = await this.o.host.inspect();
     this.fact('installation', facts.ready && bound(facts.installation, this.state().installation), 'unsafe-installation');
     this.fact('https', facts.privateHttps);
-    const settings = await this.o.api.settings();
+    const settings = await this.session(() => this.o.api.settings());
     this.fact('authentication', true);
     this.fact('origin-rejected', await this.o.api.probe('bad-origin') === 'forbidden');
     this.fact('timezone', settings.timezone !== null);
@@ -195,7 +195,7 @@ export class AcceptanceRunner {
   private async readyForStage() {
     const facts = await this.o.host.inspect();
     if (!facts.ready || !bound(facts.installation, this.state().installation)) throw new Halt('unsafe-installation');
-    const settings = await this.o.api.settings(), status = await this.o.api.status();
+    const settings = await this.session(() => this.o.api.settings()), status = await this.session(() => this.o.api.status());
     if (!settings.timezone || !status.assistantConfigured || status.notifications.pausedByConfig || !status.notifications.pushConfigured) throw new Halt('unavailable');
   }
   private async browser() {
