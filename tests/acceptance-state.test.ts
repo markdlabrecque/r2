@@ -83,11 +83,11 @@ describe('private journal', () => {
   it('retains old retry cases and checkpoints confirmation identity before effects', () => {
     const f = setup(); const lease = f.registry.acquire(installation, f.owner);
     const old = syntheticCase(); old.phase = 'blocked'; old.reason = 'invalid-response'; f.state.cases = [old]; lease.create(f.state);
-    const retry = { ...syntheticCase(), caseNumber: 2, proposalId: randomUUID(), phase: 'confirm-intent' as const };
+    const retry = { ...syntheticCase(), caseNumber: 2, proposalId: 'prp_abcdefghijklmnopqrstuv', phase: 'confirm-intent' as const };
     const pending = { id: randomUUID(), operation: 'confirm' as const, stage: 'case-a' as const, at: f.state.updatedAt, caseLabel: 'A' as const, caseRequestId: retry.requestId };
     const intended = { ...f.state, cases: [old, retry], sequence: 1, pending };
     lease.beginMutation(intended, 0); expect(lease.load().cases).toHaveLength(2);
-    lease.resolveRecovery({ ...intended, sequence: 2, pending: null, cases: [old, { ...retry, phase: 'confirmed', reminderId: randomUUID() }] }, 1, pending.id);
+    lease.resolveRecovery({ ...intended, sequence: 2, pending: null, cases: [old, { ...retry, phase: 'confirmed', reminderId: 'rem_abcdefghijklmnopqrstuv' }] }, 1, pending.id);
     const loaded = lease.load(); expect(loaded.cases[0]).toEqual(old);
     errorOnly(() => lease.commit({ ...loaded, sequence: 3, cases: [loaded.cases[1]] }, 2));
   });
@@ -118,7 +118,7 @@ describe('private journal', () => {
   });
   it('binds reboot to a confirmed case and requires verified restoration before intent', () => {
     const f = setup(); const lease = f.registry.acquire(installation, f.owner);
-    const c = { ...syntheticCase(), label: 'reboot' as const, proposalId: randomUUID(), reminderId: randomUUID(), phase: 'confirmed' as const };
+    const c = { ...syntheticCase(), label: 'reboot' as const, proposalId: 'prp_abcdefghijklmnopqrstuv', reminderId: 'rem_abcdefghijklmnopqrstuv', phase: 'confirmed' as const };
     const reboot = { previousBootId: f.owner.bootId, installation, caseLabel: 'reboot' as const, caseRequestId: c.requestId, phase: 'pending' as const, at: f.state.updatedAt };
     const pending = { id: randomUUID(), operation: 'reboot' as const, stage: 'reboot' as const, at: f.state.updatedAt, caseLabel: 'reboot' as const, caseRequestId: c.requestId };
     lease.create(f.state);

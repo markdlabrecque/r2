@@ -1,0 +1,17 @@
+# Acceptance API and cases
+
+These modules are building blocks for the coordinator, not an acceptance command. They perform no host operations and do not establish browser notification display. A live `propose` spends model quota and confirmation creates a persistent synthetic reminder. The future CLI must disclose both before asking for approval.
+
+## Client
+
+`AcceptanceApi(origin, { fetch?, timeoutMs?, maxBytes? })` requires one HTTPS origin. `login(password)` keeps only the Secure owner cookie in private runtime memory. `logout()` clears it even on failure. The app actually uses `POST /api/session` and `DELETE /api/session`; issue 30's `/api/login` and `/api/logout` names were a ticket typo. No application routes changed. Other methods correspond to the existing settings, status, push, chat, confirmation, reminders and pause routes. Redirects are disabled. Writes carry the configured Origin. Anonymous and invalid-origin probes are separate; the latter first verifies the owner session and submits an invalid login body, not a pause mutation. There is no loopback health method.
+
+The client returns schema-checked, narrowed values. `ApiError.code` is safe for control flow; never persist or log raw inputs, DTOs, response headers or errors. Passwords, origin and cookies must not be passed to the journal. Transport injection is a test boundary, not a mechanism for forwarding owner cookies to another server.
+
+## Cases and recovery
+
+`makeCase(label, number, timezone, now, leadMs)` constructs a unique synthetic request in an already-configured owner timezone. `AcceptanceCases(api, lease, clock)` requires an acquired, initialized journal lease. The coordinator must provide explicit owner approval and check recovery/cleanup first. `propose(plan)` records case and mutation intent before calling the model. A lost or malformed response leaves proposal intent pending and the case `proposal-unresolved`. It does not prove that no proposal was stored. Reconcile that intent explicitly and require a new owner-approved case before retrying. Clarification and unsupported responses block the case without confirming.
+
+On a valid proposal the helper stores its ID and validates the exact synthetic text, local date/time, zone, offset, UTC instant and expiry. `confirm(requestId)` requires the same instance's in-memory validation and a sufficient remaining window, and writes the confirmation intent before the request. If the response is lost, `reconcileConfirmation()` retries only the journaled proposal/request pair. It never starts a new case, and refuses a too-near-due unknown confirmation. It records the returned reminder ID before checking its retained fields. `repeatConfirmation(requestId)` journals and repeats a known confirmation to check identity. A pending invalid response or persistence error requires explicit inspection. No helper automatically clears a pending model operation.
+
+`findKnown`, `proposalInList` and `retained` compare known IDs and schedules. An absent item is inconclusive because the app returns at most 500 reminders. `sameSubscription` compares non-null versions, not endpoints. `pollReminder` is bounded by a clock, wait adapter, deadline and iteration limit. Its provider-accepted result requires both an accepted reminder and an accepted attempt; it is not observed display. Project only catalogued facts through the journal/report contracts, never raw returned DTOs.
