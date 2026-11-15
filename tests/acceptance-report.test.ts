@@ -45,7 +45,7 @@ describe('truthful evidence exports', () => {
     expect(() => projectReport({ ...s, optionalChecks: ['a-observed'] })).toThrow('invalid-state');
   });
   it('preserves provenance and original case/evidence times through serialization and resume', () => {
-    const s = complete(); const c = syntheticCase(); c.proposalId = randomUUID(); c.reminderId = randomUUID(); c.attemptAt = c.dueAt + 1000; c.acceptedAt = c.dueAt + 2000; s.cases = [c];
+    const s = complete(); const c = syntheticCase(); c.proposalId = 'prp_abcdefghijklmnopqrstuv'; c.reminderId = 'rem_abcdefghijklmnopqrstuv'; c.attemptAt = c.dueAt + 1000; c.acceptedAt = c.dueAt + 2000; s.cases = [c];
     s.checks = [evidence('a-provider', 'pass', 'automated', 'verified', c.acceptedAt), evidence('a-observed', 'blocked', 'owner-reported', 'unavailable', c.acceptedAt + 4000)];
     const resumed = validateJournal(JSON.parse(JSON.stringify(s)));
     expect(jsonReport(resumed)).toBe(jsonReport(s));

@@ -11,6 +11,8 @@ export class AcceptanceError extends Error {
   }
 }
 export const idSchema = z.string().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/);
+export const proposalIdSchema = z.string().regex(/^prp_[A-Za-z0-9_-]{22}$/);
+export const reminderIdSchema = z.string().regex(/^rem_[A-Za-z0-9_-]{22}$/);
 export const fingerprintSchema = z.string().regex(/^[a-f0-9]{64}$/);
 export const instantSchema = z.number().int().min(0).max(8_640_000_000_000_000);
 export const stages = ['preflight', 'browser', 'case-a', 'case-b', 'case-c', 'devices', 'reboot', 'cleanup', 'complete'] as const;
@@ -39,7 +41,7 @@ export const checkSchema = z.strictObject({
 export type CheckResult = z.infer<typeof checkSchema>;
 export const caseSchema = z.strictObject({
   label: z.enum(caseLabels), caseNumber: z.number().int().min(1).max(32),
-  requestId: idSchema, proposalId: idSchema.nullable(), reminderId: idSchema.nullable(),
+  requestId: idSchema, proposalId: proposalIdSchema.nullable(), reminderId: reminderIdSchema.nullable(),
   reason: z.enum(reasons).nullable(),
   phase: z.enum(['intended', 'proposal-unresolved', 'proposed', 'confirm-intent', 'confirmed', 'blocked']),
   dueAt: instantSchema, localDateTime: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/).refine(v => {
