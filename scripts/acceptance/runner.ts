@@ -7,7 +7,7 @@ import type { JournalLease } from './state.ts';
 import { projectReport } from './report.ts';
 
 type Stage = Journal['stage'];
-export type PromptId = CheckId | HostOperation | 'live-run' | 'connect' | 'create-case' | 'confirm-case' | 'temporary-unpause' | 'pause' | 'retry-stage';
+export type PromptId = CheckId | HostOperation | 'live-run' | 'connect' | 'create-case' | 'confirm-case' | 'temporary-unpause' | 'pause' | 'retry-stage' | 'reboot';
 export interface RunnerPrompt {
   id: PromptId; stage: Stage; message: string;
   /** There is deliberately no default answer. Only an explicit approved result is affirmative. */
@@ -170,10 +170,12 @@ export class AcceptanceRunner {
       await this.recoverOwned();
       const facts = await this.o.host.inspect();
       if (!facts.active || !facts.healthy || !bound(facts.installation, this.state().installation)) throw new Halt('unsafe-installation', 'fail');
+      const originalPause = this.state().cleanup.originalPause;
+      if (originalPause !== null && (await this.session(() => this.o.api.settings())).notificationsPaused !== originalPause) throw new Halt('conflict', 'fail');
       this.record('cleanup', 'pass', 'automated', 'verified');
     } catch (e) {
       const reason = e instanceof Halt ? e.reason : e instanceof ApiError && e.code === 'unauthorized' ? 'unauthorized' : 'operation-failed';
-      this.update(s => { if (s.cleanup.status !== 'conflict') s.cleanup.status = 'failed'; });
+      this.update(s => { if (reason === 'conflict') s.cleanup.status = 'conflict'; else if (s.cleanup.status !== 'conflict') s.cleanup.status = 'failed'; });
       this.record('cleanup', 'fail', 'automated', reason);
     }
   }
@@ -309,6 +311,7 @@ export class AcceptanceRunner {
     if (this.busy || activeRunners.has(this.o.lease)) throw new Halt('conflict');
     if (this.o.mode === 'read-only') return this.inspect();
     if (this.o.mode !== 'non-production-live') throw new Halt('unauthorized');
+    if (this.state().pending?.operation === 'reboot') { this.o.lease.exportReports(); return projectReport(this.state()); }
     activeRunners.add(this.o.lease);
     this.cancellation = new AbortController();
     this.busy = true; this.signal = signal ? AbortSignal.any([signal, this.cancellation.signal]) : this.cancellation.signal; this.liveApproved = false;
@@ -346,6 +349,7 @@ export class AcceptanceRunner {
   /** Explicit recovery does not replay stages. Reauthentication is allowed only in memory. */
   async recover() {
     if (this.busy || activeRunners.has(this.o.lease) || this.o.mode !== 'non-production-live') throw new Halt('unauthorized');
+    if (this.state().pending?.operation === 'reboot') { this.o.lease.exportReports(); return projectReport(this.state()); }
     activeRunners.add(this.o.lease);
     this.busy = true; this.signal = undefined; this.liveApproved = false;
     try {
@@ -371,10 +375,63 @@ export class AcceptanceRunner {
       });
     } finally { try { this.o.lease.exportReports(); } finally { this.busy = false; activeRunners.delete(this.o.lease); } }
   }
-  /** For issue 32: read-only eligibility, not reboot authority or a fabricated boot-change fact. */
+  /** Explicit reboot preparation owns the same coordinator gate as ordinary stages. */
+  async withRebootPreparation<T>(work: (checkpoint: () => ReturnType<AcceptanceRunner['rebootCheckpoint']>) => Promise<T>): Promise<T> {
+    if (this.busy || activeRunners.has(this.o.lease) || this.o.mode !== 'non-production-live' || !this.o.hostDisruption) throw new Halt('unauthorized');
+    activeRunners.add(this.o.lease); this.busy = true; this.signal = undefined; this.liveApproved = false;
+    try {
+      await this.approve('live-run', 'Prepare an explicitly opted-in non-production reboot. Restore all temporary settings first. New synthetic reminders cost quota and cannot be cancelled.', undefined, true);
+      this.liveApproved = true;
+      await this.recoverOwned();
+      if (this.state().coordinator?.active || !['case-a', 'case-b', 'case-c', 'devices'].every(stage => this.state().coordinator?.completed.includes(stage as Stage))) throw new Halt('conflict');
+      await this.readyForStage();
+      return await work(() => this.rebootEligibility());
+    } finally {
+      try { if (this.liveApproved && this.state().pending?.operation !== 'reboot') await this.cleanup(); }
+      finally { try { this.o.lease.exportReports(); } finally { this.busy = false; activeRunners.delete(this.o.lease); } }
+    }
+  }
+  /** Post-boot provider work only. Original pause is restored on every exit, including true.
+   * Never leaves deliberate pause debt across the reboot boundary. */
+  async withRebootNotifications<T>(work: (enableNotifications: () => Promise<void>) => Promise<T>, inspect?: () => Promise<void>): Promise<T> {
+    if (this.busy || activeRunners.has(this.o.lease) || this.o.mode !== 'non-production-live' || !this.state().reboot) throw new Halt('unauthorized');
+    activeRunners.add(this.o.lease); this.busy = true; this.signal = undefined; this.liveApproved = false;
+    try {
+      await inspect?.();
+      if (this.state().reboot?.phase !== 'resumed') throw new Halt('conflict');
+      await this.approve('live-run', 'Inspect this resumed non-production reboot case and restore original pause on exit. No new case or reboot will be scheduled.', undefined, true);
+      this.liveApproved = true;
+      await this.recoverOwned();
+      if ((await this.session(() => this.o.api.settings())).notificationsPaused !== this.state().cleanup.originalPause) throw new Halt('conflict', 'fail');
+      await this.readyForStage();
+      return await work(async () => {
+        if (!this.state().checks.some(c => c.id === 'reboot-provider' && c.status === 'pass') &&
+          (await this.session(() => this.o.api.settings())).notificationsPaused) {
+          const c = this.state().cases.find(c => c.requestId === this.state().reboot!.caseRequestId)!;
+          // Originally paused owners keep that preference across boot and due. This is an
+          // explicitly approved overdue test, never normal-condition submission evidence.
+          if (this.o.clock.now() <= c.dueAt) await this.o.wait.until(c.dueAt + 1);
+          await this.pause(false);
+        }
+      });
+    } catch (e) {
+      if (this.liveApproved && !this.state().checks.some(c => c.id === 'reboot-provider' && c.status === 'pass')) {
+        this.record('reboot-provider', 'blocked', 'automated', e instanceof Halt ? e.reason : e instanceof ApiError && e.code === 'unauthorized' ? 'unauthorized' : 'operation-failed');
+      }
+      throw e;
+    } finally {
+      try { if (this.liveApproved) await this.cleanup(); }
+      finally { try { this.o.lease.exportReports(); } finally { this.busy = false; activeRunners.delete(this.o.lease); } }
+    }
+  }
+  /** Read-only eligibility, not reboot authority or a fabricated boot-change fact. */
   rebootCheckpoint() {
+    if (this.busy || activeRunners.has(this.o.lease)) throw new Halt('conflict');
+    return this.rebootEligibility();
+  }
+  private rebootEligibility() {
     const s = this.state();
-    if (this.busy || activeRunners.has(this.o.lease) || s.pending || s.cleanup.status !== 'verified' || s.coordinator?.active ||
+    if (s.pending || s.cleanup.status !== 'verified' || s.coordinator?.active ||
       !['case-a', 'case-b', 'case-c', 'devices'].every(stage => s.coordinator?.completed.includes(stage as Stage))) throw new Halt('conflict');
     const c = s.cases.find(c => c.label === 'reboot' && c.phase === 'confirmed');
     if (!c || c.dueAt <= this.o.clock.now() + 60_000) throw new Halt('missed-window');

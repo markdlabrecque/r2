@@ -221,6 +221,17 @@ export class JournalLease {
     }
     if (previous.reboot !== null && (next.reboot === null ||
       (['previousBootId', 'installation', 'caseLabel', 'caseRequestId', 'at'] as const).some(k => !same(previous.reboot![k], next.reboot![k])))) throw new AcceptanceError('invalid-state');
+    if (previous.coordinator?.rebootSelected && !next.coordinator?.rebootSelected) throw new AcceptanceError('invalid-state');
+    if (previous.reboot && next.reboot) {
+      const transitions: Record<NonNullable<Journal['reboot']>['phase'], string[]> = {
+        prepared: ['prepared', 'pending', 'declined', 'failed'], pending: ['pending', 'failed', 'resumed'],
+        failed: ['failed', 'resumed'], declined: ['declined'], resumed: ['resumed'],
+      };
+      if (!transitions[previous.reboot.phase].includes(next.reboot.phase)) throw new AcceptanceError('invalid-state');
+    }
+    if (previous.reboot?.resume && (!next.reboot?.resume ||
+      (['bootId', 'at', 'automaticRecovery'] as const).some(k => previous.reboot!.resume![k] !== next.reboot!.resume![k]) ||
+      previous.reboot.resume.submission !== 'pending' && previous.reboot.resume.submission !== next.reboot.resume.submission)) throw new AcceptanceError('invalid-state');
     if (previous.cleanup.originalPause !== null && next.cleanup.originalPause !== previous.cleanup.originalPause) throw new AcceptanceError('invalid-state');
     if (!same(previous.optionalChecks, next.optionalChecks) || previous.priorBootId !== next.priorBootId) throw new AcceptanceError('invalid-state');
     atomic(this.path, JSON.stringify(next), this.hook); return next;
