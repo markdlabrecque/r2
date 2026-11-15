@@ -3,6 +3,8 @@
 A personal reminder agent for one owner. The first slice uses private web chat through Tailscale and generic browser notifications.
 
 - [Product requirements](PRD.md)
+- [Domain glossary](GLOSSARY.md)
+- [Domain model and code map](docs/domain-model.md)
 - [Approved first-slice plan](docs/first-slice.packed.html)
 - [Slice #1 and its task issues](https://github.com/markdlabrecque/r2/issues/1)
 
