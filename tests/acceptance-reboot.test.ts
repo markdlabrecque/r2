@@ -289,8 +289,9 @@ it('strict resumed snapshot rejects unknown fields, unchanged boot and rewritten
   expect(projectReport(s).reboot).not.toHaveProperty('bootId');
 });
 
-it.each(['prepared', 'pending'] as const)('atomic crash matrix for %s checkpoint never schedules after uncertain persistence', async phase => {
-  for (const boundary of ['temp-created', 'temp-synced', 'renamed', 'directory-synced']) {
+it.each((['prepared', 'pending'] as const).flatMap(phase =>
+  ['temp-created', 'temp-synced', 'renamed', 'directory-synced'].map(boundary => ({ phase, boundary }))))(
+  'atomic crash at $phase checkpoint/$boundary never schedules after uncertain persistence', async ({ phase, boundary }) => {
     const x = await setup(); let armed = false, tripped = false;
     const commit = x.lease.commit.bind(x.lease), begin = x.lease.beginMutation.bind(x.lease);
     x.lease.commit = (input, seq) => {
@@ -307,7 +308,6 @@ it.each(['prepared', 'pending'] as const)('atomic crash matrix for %s checkpoint
     expect(() => x.lease.load()).not.toThrow();
     if (x.lease.load().pending?.operation === 'reboot') { x.boot(); await x.reboot().resume(); }
     expect(x.commands).not.toContain('reboot');
-  }
 });
 
 it.each(['temp-created', 'temp-synced', 'renamed', 'directory-synced'])('resumes idempotently after interrupted automatic-recovery snapshot at %s', async boundary => {

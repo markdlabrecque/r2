@@ -14,12 +14,13 @@ Scope: [32](https://github.com/markdlabrecque/r2/issues/32), based on `a613614ea
 6. **Late final inspection.** Approval-time lead checks alone were insufficient because host inspection is asynchronous. The host now rechecks the stable case's confirmed phase and remaining due window immediately before the reboot effect.
 7. **Hidden opt-in and misleading timing.** A declined case step could otherwise become optional again after generic completion. Immutable `coordinator.rebootSelected` preserves required reboot gates. Provider acceptance remains separate from submission classification; a missed normal window blocks overall acceptance, while a return after due is explicitly overdue recovery.
 8. **Unjournaled operator changes.** Cleanup now verifies actual original pause even without a remaining flag. A changed owner pause is a conflict, not permission to overwrite it. A positively observed retained-time mismatch stays failed and cannot authorize temporary unpause.
+9. **CI crash-matrix granularity.** The initial pushed head hit Vitest's five-second limit while one test executed four complete baseline/crash/resume scenarios. Each phase/boundary combination is now its own test with identical assertions and the unchanged five-second timeout. No checks, coverage or CI limits were weakened.
 
 No unresolved code defect was found in the reviewed scope. Unknown/live external state remains fail-closed rather than being guessed into a result.
 
 ## Executable evidence
 
-`tests/acceptance-reboot.test.ts` adds 51 tests. Its dedicated fixture uses the actual `AcceptanceRunner`, `AcceptanceHost`, `AcceptanceApi`, `AcceptanceCases`, private journal/lock/report implementation, real application routes and temporary SQLite. Only host commands/files, clock/wait, prompts, model and push boundaries are synthetic. Each reboot setup runs the integrated A/B/C/device baseline first. There are no wall-clock sleeps or real host actions.
+`tests/acceptance-reboot.test.ts` adds 57 tests. Its dedicated fixture uses the actual `AcceptanceRunner`, `AcceptanceHost`, `AcceptanceApi`, `AcceptanceCases`, private journal/lock/report implementation, real application routes and temporary SQLite. Only host commands/files, clock/wait, prompts, model and push boundaries are synthetic. Each reboot setup runs the integrated A/B/C/device baseline first. There are no wall-clock sleeps or real host actions.
 
 Coverage includes both original pause values; cleanup/checkpoint/acknowledgement/approval/command order; capability, TTY, privilege and scoped approval gates; same/new boot; old-boot takeover and stale-lease invalidation; live/uncertain ownership refusal; changed installed revision; missing/corrupt/prepared-only checkpoints; failed automatic startup followed by approved repair; stopped Tailscale, missing Serve, enabled Funnel, unsafe listener and HTTPS failure; in-memory reauthentication and lost-session restoration; retained-time mismatch; missed normal window and overdue recovery; owner display unavailable independently of provider acceptance; declined creation/save/reboot/instructions/unpause; failed/uncertain command outcomes; repeated resume; checkpoint and snapshot crash matrices; and missing volatile artifacts reconciled through the existing host journal without recreation. Sensitive synthetic canaries remain absent from state/reports and fixed errors.
 
@@ -30,7 +31,7 @@ Final local checks under Node **v24.20.0**:
 | `npm run test:factory` | 7 passed; suite only, no Factory task run |
 | `npm run typecheck` | Passed, including acceptance scripts and tests |
 | `npm run build` | Passed |
-| `npm test` | 455 passed, 1 existing skip across 18 files |
+| `npm test` | 461 passed, 1 existing skip across 18 files |
 | `npm run test:browser` | 2 Chromium tests passed |
 | `git diff --check` | Passed |
 
