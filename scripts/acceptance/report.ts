@@ -5,6 +5,7 @@ export const recoveryInstructions = Object.freeze({
   conflict: 'Keep the host/unit lock. Preserve operator edits. Use the host adapter inspect-owned-artifacts guidance and reconcile privately before recovery.',
   recover: 'Keep the host/unit lock. Stop new stages. Recover this same run with fresh non-production and restore-model approval. Reauthenticate in memory if needed; original pause restoration remains required.',
   proposal: 'Do not replay the model request. Recover host and pause first, then explicitly approve retryStage to retain the unresolved case and create a new case only deliberately.',
+  reboot: 'Keep the host/unit lock. Use explicit reboot resume for this same run after verified old-boot takeover and in-memory sign-in. Same boot or uncertain scheduling blocks acceptance. Do not retry the reboot command or delete the lock. For an uncertain failed command that never rebooted, the owner must privately reconcile pending reboot jobs before any manual journal/lock recovery.',
   stage: 'The stage was interrupted. Do not replay it automatically. Review remaining permanent synthetic cases, recover owned state, then explicitly approve retryStage.',
 });
 /** Complete catalog, including missing checks. Optional reboot checks remain visible. */
@@ -13,20 +14,20 @@ export function projectReport(input: unknown) {
   const checks = checkIds.map(id => {
     const c = state.checks.find(c => c.id === id);
     return {
-      id, required: !state.optionalChecks.includes(id), status: c?.status ?? 'not-run',
+      id, required: !state.optionalChecks.includes(id) || id.startsWith('reboot-') && (state.reboot !== null || state.stage === 'reboot' || state.coordinator?.rebootSelected === true), status: c?.status ?? 'not-run',
       provenance: c?.provenance ?? null, reason: c?.reason ?? 'pending', at: c?.at ?? null,
     };
   });
   const required = checks.filter(c => c.required);
   const overall = state.cleanup.status === 'failed' || state.cleanup.status === 'conflict' || required.some(c => c.status === 'fail')
-    ? 'fail' : state.cleanup.status === 'verified' && state.pending === null && !state.coordinator?.active && required.every(c => c.status === 'pass')
+    ? 'fail' : state.cleanup.status === 'verified' && state.pending === null && !state.coordinator?.active && state.reboot?.resume?.submission !== 'missed-window' && required.every(c => c.status === 'pass')
       ? 'pass' : 'blocked';
   // Explicit projection. Never spread a journal, adapter DTO or arbitrary error into output.
   return {
     version: 1, runId: state.runId, sequence: state.sequence, stage: state.stage,
     createdAt: state.createdAt, updatedAt: state.updatedAt, overall,
     cleanup: state.cleanup.status, recoveryRequired: state.pending !== null || state.cleanup.status !== 'verified',
-    recoveryInstruction: state.cleanup.status === 'conflict' ? 'conflict' as const : state.pending?.operation === 'propose' ? 'proposal' as const
+    recoveryInstruction: state.pending?.operation === 'reboot' ? 'reboot' as const : state.cleanup.status === 'conflict' ? 'conflict' as const : state.pending?.operation === 'propose' ? 'proposal' as const
       : state.pending || state.cleanup.status !== 'verified' ? 'recover' as const : state.coordinator?.active ? 'stage' as const : 'none' as const,
     remainingFutureCases: state.cases.filter(c => c.reminderId !== null && c.acceptedAt === null && c.dueAt > state.updatedAt)
       .map(c => ({ label: c.label, caseNumber: c.caseNumber, dueAt: c.dueAt })),
@@ -35,7 +36,8 @@ export function projectReport(input: unknown) {
     cases: state.cases.map(c => ({ label: c.label, caseNumber: c.caseNumber, phase: c.phase, reason: c.reason, dueAt: c.dueAt,
       localDateTime: c.localDateTime, timezone: c.timezone, createdAt: c.createdAt,
       attemptAt: c.attemptAt, acceptedAt: c.acceptedAt })),
-    reboot: state.reboot === null ? null : { phase: state.reboot.phase, at: state.reboot.at },
+    reboot: state.reboot === null ? null : { phase: state.reboot.phase, at: state.reboot.at,
+      submission: state.reboot.resume?.submission ?? 'pending' },
   };
 }
 export function jsonReport(input: unknown): string { return `${JSON.stringify(projectReport(input), null, 2)}\n`; }
@@ -56,7 +58,7 @@ export function markdownReport(input: unknown): string {
     '| Case | Phase | Original due UTC | Original local time | Zone | Created | Attempt | Accepted |',
     '| --- | --- | --- | --- | --- | --- | --- | --- |',
     ...r.cases.map(c => `| ${c.label}-${c.caseNumber} | ${c.phase}${c.reason === null ? '' : ` / ${c.reason}`} | ${time(c.dueAt)} | ${c.localDateTime} | ${c.timezone} | ${time(c.createdAt)} | ${time(c.attemptAt)} | ${time(c.acceptedAt)} |`),
-    '', ...(r.reboot ? [`Reboot: ${r.reboot.phase}, ${time(r.reboot.at)}`, ''] : []),
+    '', ...(r.reboot ? [`Reboot: ${r.reboot.phase}, ${time(r.reboot.at)}. Submission: ${r.reboot.submission}. Automatic recovery, provider acceptance and owner-observed display are separate checks.`, ''] : []),
   ].join('\n');
 }
 /** Construction helper for typed adapters; runtime journal validation still rejects extra fields. */

@@ -81,13 +81,16 @@ export const cleanupSchema = z.strictObject({
 });
 export type CleanupIntent = z.infer<typeof cleanupSchema>;
 export const rebootSchema = z.strictObject({ previousBootId: idSchema, installation: installationSchema,
-  caseLabel: z.literal('reboot'), caseRequestId: idSchema, phase: z.enum(['prepared', 'pending', 'resumed', 'declined', 'failed']), at: instantSchema });
+  caseLabel: z.literal('reboot'), caseRequestId: idSchema, phase: z.enum(['prepared', 'pending', 'resumed', 'declined', 'failed']), at: instantSchema,
+  resume: z.strictObject({ bootId: idSchema, at: instantSchema, automaticRecovery: z.boolean(),
+    submission: z.enum(['pending', 'normal-window', 'overdue-recovery', 'missed-window']) }).optional(),
+});
 export const journalSchema = z.strictObject({
   version: z.literal(1), runId: idSchema, sequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   installation: installationSchema, priorBootId: idSchema, stage: z.enum(stages), createdAt: instantSchema, updatedAt: instantSchema,
   optionalChecks: z.array(z.enum(checkIds)).max(checkIds.length), checks: z.array(checkSchema).max(checkIds.length),
   cases: z.array(caseSchema).max(32), cleanup: cleanupSchema, pending: intentSchema.nullable(), reboot: rebootSchema.nullable(),
-  coordinator: z.strictObject({ completed: z.array(z.enum(stages)).max(stages.length), active: z.enum(stages).nullable() }).optional(),
+  coordinator: z.strictObject({ completed: z.array(z.enum(stages)).max(stages.length), active: z.enum(stages).nullable(), rebootSelected: z.literal(true).optional() }).optional(),
 }).superRefine((s, ctx) => {
   for (const values of [s.checks.map(c => c.id), s.cases.map(c => `${c.label}-${c.caseNumber}`), s.cases.map(c => c.requestId), s.optionalChecks]) {
     if (new Set(values).size !== values.length) ctx.addIssue({ code: 'custom', message: 'Duplicate entry.' });
@@ -100,8 +103,12 @@ export const journalSchema = z.strictObject({
     s.coordinator.active !== null && s.coordinator.completed.includes(s.coordinator.active))) ctx.addIssue({ code: 'custom', message: 'Invalid progress.' });
   // These safety/evidence gates cannot be made optional.
   if (s.optionalChecks.some(c => !c.startsWith('reboot-'))) ctx.addIssue({ code: 'custom', message: 'Required check.' });
+  if (s.pending?.operation === 'reboot' && (!s.reboot || !['pending', 'failed'].includes(s.reboot.phase) ||
+    s.pending.caseLabel !== 'reboot' || s.pending.caseRequestId !== s.reboot.caseRequestId ||
+    s.pending.stage !== 'reboot' || s.cleanup.status !== 'verified')) ctx.addIssue({ code: 'custom', message: 'Invalid reboot intent.' });
   if (s.reboot && (!s.cases.some(c => c.label === 'reboot' && c.requestId === s.reboot!.caseRequestId && c.reminderId !== null) ||
-    JSON.stringify(s.reboot.installation) !== JSON.stringify(s.installation))) ctx.addIssue({ code: 'custom', message: 'Invalid reboot.' });
+    JSON.stringify(s.reboot.installation) !== JSON.stringify(s.installation) ||
+    s.reboot.resume && (s.reboot.resume.bootId === s.reboot.previousBootId || s.reboot.phase !== 'resumed'))) ctx.addIssue({ code: 'custom', message: 'Invalid reboot.' });
 });
 export type Journal = z.infer<typeof journalSchema>;
 export function validateJournal(input: unknown): Journal {

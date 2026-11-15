@@ -1,7 +1,7 @@
 import fs, { constants as C } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { type Clock, type Installation, type Journal, type StageApproval, type CleanupIntent } from './contracts.ts';
+import { idSchema, type Clock, type Installation, type Journal, type StageApproval, type CleanupIntent } from './contracts.ts';
 import type { JournalLease } from './state.ts';
 
 export type HostOperation = 'restart' | 'stop' | 'start' | 'disable-model' | 'restore-model';
@@ -231,7 +231,40 @@ export class AcceptanceHost {
         ready: active && enabled && healthy && loopbackOnly && clock === 'yes\n' };
     } catch (e) { if (e instanceof HostError) throw e; return fail('unsafe-installation'); }
   }
-  private authorize(lease: JournalLease, authority: HostAuthority, operation: HostOperation): Journal {
+  /** Stable installed binding, independent of whether automatic service/Serve recovery succeeded. */
+  identity(): Installation {
+    try { return this.installation(); } catch { return fail('unsafe-installation'); }
+  }
+  /** Trusted current boot fact; no hostname or process environment is returned. */
+  bootId(): string {
+    try { return idSchema.parse(this.read('/proc/sys/kernel/random/boot_id', 0o444).trim()); }
+    catch { return fail('unsafe-installation'); }
+  }
+  /** Additional read-only boot recovery fact. Never starts Tailscale or changes Serve. */
+  async inspectBoot(): Promise<HostFacts> {
+    const facts = await this.inspect();
+    try {
+      const status = JSON.parse(await this.command('/usr/bin/tailscale', ['status', '--json'])) as { BackendState?: unknown };
+      if (status.BackendState !== 'Running') fail('unsafe-installation');
+      return facts;
+    } catch { return fail('unsafe-installation'); }
+  }
+  /** Only the explicit reboot coordinator can supply the already-durable pending intent. */
+  async reboot(lease: JournalLease, authority: HostAuthority): Promise<void> {
+    return this.exclusive(lease, async () => {
+      const s = this.authorize(lease, authority, 'reboot'); this.bound(s);
+      if (s.stage !== 'reboot' || s.pending?.operation !== 'reboot' || s.reboot?.phase !== 'pending' ||
+        s.cleanup.status !== 'verified' || s.pending.caseRequestId !== s.reboot.caseRequestId ||
+        this.bootId() !== s.reboot.previousBootId || lease.owner.bootId !== s.reboot.previousBootId) fail('recovery-required');
+      if (!(await this.inspectBoot()).ready) fail('unsafe-installation');
+      const c = lease.load().cases.find(c => c.requestId === s.reboot!.caseRequestId);
+      if (!c || c.phase !== 'confirmed' || c.dueAt <= this.options.clock.now() + 60_000 ||
+        this.bootId() !== s.reboot!.previousBootId) fail('recovery-required');
+      this.effect(lease);
+      await this.command('/usr/bin/systemctl', ['reboot', '--no-ask-password']);
+    });
+  }
+  private authorize(lease: JournalLease, authority: HostAuthority, operation: HostOperation | 'reboot'): Journal {
     const s = lease.load(), a = authority.approval;
     if (authority.nonProduction !== true || authority.hostDisruption !== true || !this.options.privileged() || !this.options.interactive() ||
       a.outcome !== 'approved' || a.runId !== s.runId || a.stage !== s.stage || a.operation !== operation || consumedApprovals.has(a)) fail('unauthorized');
