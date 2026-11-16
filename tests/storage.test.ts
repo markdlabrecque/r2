@@ -381,6 +381,62 @@ describe('proposals and atomic confirmation', () => {
   });
 });
 
+describe('delivery leases across SQLite connections', () => {
+  function connections() {
+    const path = join(tmp(), 'r2.sqlite');
+    const clock = new FakeClock();
+    const a = file(path, clock);
+    const b = file(path, clock);
+    const reminder = a.confirmProposal(a.storeProposal(proposalInput()).id, 'req-lease');
+    clock.advance(reminder.dueAt - clock.now());
+    return { a, b, clock, reminder };
+  }
+
+  it('does not let a second connection claim or recover a live lease', () => {
+    const { a, b, clock, reminder } = connections();
+    const [claim] = a.claimDueReminders({ limit: 1, leaseMs: 1000 });
+    expect(claim).toMatchObject({ id: reminder.id, state: 'sending', attempts: 1, leaseUntil: clock.now() + 1000 });
+    expect(claim?.claimToken).toEqual(expect.any(String));
+    expect(b.getReminder(reminder.id)).toEqual(claim);
+    clock.advance(999);
+    expect(b.recoverExpiredLeases({ maxAttempts: 4 })).toBe(0);
+    expect(b.claimDueReminders({ limit: 1, leaseMs: 1000 })).toEqual([]);
+    expect(a.getReminder(reminder.id)).toEqual(claim);
+  });
+
+  it('rejects the old token after another connection recovers and reclaims an expired lease', () => {
+    const { a, b, clock, reminder } = connections();
+    const old = a.claimDueReminders({ limit: 1, leaseMs: 1000 })[0]!;
+    const oldToken = old.claimToken!;
+    const oldAttempt = a.startDeliveryAttempt({ reminderId: reminder.id, claimToken: oldToken, subscriptionVersion: 1 });
+    clock.advance(1000);
+    expect(b.recoverExpiredLeases({ maxAttempts: 4 })).toBe(1);
+    const current = b.claimDueReminders({ limit: 1, leaseMs: 1000 })[0]!;
+    expect(current).toMatchObject({ id: reminder.id, state: 'sending', attempts: 2, dueAt: reminder.dueAt });
+    expect(current.claimToken).toEqual(expect.any(String));
+    expect(current.claimToken).not.toBe(oldToken);
+    const currentAttempt = b.startDeliveryAttempt({ reminderId: reminder.id, claimToken: current.claimToken!, subscriptionVersion: 1 });
+    const attempts = b.listDeliveryAttempts(reminder.id);
+    expect(attempts).toEqual([
+      expect.objectContaining({ id: oldAttempt.id, outcome: 'unknown', errorCode: 'interrupted', finishedAt: clock.now() }),
+      expect.objectContaining({ id: currentAttempt.id, attemptNumber: 2, outcome: 'started', finishedAt: null }),
+    ]);
+
+    // A delayed sender must not settle the replacement owner's reminder, through
+    // either the atomic attempt path or the lower-level settlement operations.
+    expect(a.settleDelivery({ attemptId: oldAttempt.id, reminderId: reminder.id, claimToken: oldToken, outcome: 'accepted', settlement: { state: 'accepted' } })).toBe(false);
+    expect(a.markAccepted(reminder.id, oldToken)).toBe(false);
+    expect(a.scheduleRetry(reminder.id, oldToken, clock.now() + 30_000, 'temporary')).toBe(false);
+    expect(a.markFailed(reminder.id, oldToken, 'subscription_gone')).toBe(false);
+    expect(b.getReminder(reminder.id)).toEqual(current);
+    expect(b.listDeliveryAttempts(reminder.id)).toEqual(attempts);
+
+    expect(b.settleDelivery({ attemptId: currentAttempt.id, reminderId: reminder.id, claimToken: current.claimToken!, outcome: 'accepted', settlement: { state: 'accepted' } })).toBe(true);
+    expect(a.getReminder(reminder.id)).toMatchObject({ state: 'accepted', attempts: 2, dueAt: reminder.dueAt, claimToken: null, leaseUntil: null });
+    expect(a.listDeliveryAttempts(reminder.id).map((attempt) => attempt.outcome)).toEqual(['unknown', 'accepted']);
+  });
+});
+
 describe('quota and delivery records', () => {
   it('counts model usage persistently up to the limit', () => {
     const path = join(tmp(), 'r2.sqlite');

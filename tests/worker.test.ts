@@ -289,7 +289,10 @@ describe('restart, end to end, without OpenAI', () => {
 
     const first = await startService(env, { clock, logger: false, adapters: { webRoot: join(t.dir, 'none') } });
     first.storage.setTimezone('UTC');
-    first.storage.replaceSubscription(KEYS);
+    const subscription = first.storage.replaceSubscription(KEYS);
+    expect(first.storage.markSubscriptionReady(subscription.version)).toBe(true);
+    const readySubscription = first.storage.getSubscription();
+    expect(readySubscription).toMatchObject({ ...KEYS, version: subscription.version, readyAt: clock.now() });
     const p = first.storage.storeProposal({ text: 'take the bins out', dueAt: clock.now() + 5 * 60_000, timezone: 'UTC', localDateTime: '2026-10-14T12:05', expiresAt: clock.now() + 5 * 60_000 });
     const reminder = first.storage.confirmProposal(p.id, 'request-0001');
     await first.stop();
@@ -298,9 +301,13 @@ describe('restart, end to end, without OpenAI', () => {
     const second = await startService(env, { clock, logger: false, adapters: { webRoot: join(t.dir, 'none'), pushTransport: transport } });
     cleanups.push(() => second.stop());
     expect(second.config.chat.enabled).toBe(false);
+    expect(second.storage.getSubscription()).toEqual(readySubscription);
     await waitFor(() => second.storage.getReminder(reminder.id)?.state === 'accepted');
     expect(transport.sent.map((x) => x.reminderId)).toEqual([reminder.id]);
-    expect(second.storage.getReminder(reminder.id)).toMatchObject({ dueAt: reminder.dueAt, localDateTime: reminder.localDateTime });
+    expect(second.storage.getReminder(reminder.id)).toMatchObject({ dueAt: reminder.dueAt, localDateTime: reminder.localDateTime, state: 'accepted', attempts: 1, acceptedAt: clock.now() });
+    expect(second.storage.listDeliveryAttempts(reminder.id)).toEqual([
+      expect.objectContaining({ reminderId: reminder.id, attemptNumber: 1, subscriptionVersion: subscription.version, outcome: 'accepted', startedAt: clock.now(), finishedAt: clock.now(), errorCode: null }),
+    ]);
   });
 });
 
