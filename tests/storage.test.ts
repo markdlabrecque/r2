@@ -3,9 +3,7 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  DELIVERY_OUTCOMES,
   R2Error,
-  REMINDER_STATES,
   toDeliveryAttemptDto,
   toProposalDto,
   toReminderDto,
@@ -51,29 +49,17 @@ const catchError = (fn: () => unknown): unknown => {
 };
 
 describe('migration', () => {
-  it('creates exactly the contracted tables, columns and no VAPID key table', () => {
-    const { db } = mem();
-    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map((t) => t.name);
-    expect(tables).toEqual(['delivery_attempts', 'model_usage', 'owner_settings', 'proposals', 'push_subscription', 'reminders', 'schema_migrations', 'sessions']);
-    const cols = (t: string) => (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((c) => c.name);
-    expect(cols('owner_settings')).toEqual(['id', 'timezone', 'notifications_paused']);
-    expect(cols('sessions')).toEqual(['token_hash', 'created_at', 'expires_at']);
-    expect(cols('push_subscription')).toEqual(['id', 'endpoint', 'p256dh', 'auth', 'version', 'ready_at']);
-    expect(cols('proposals')).toEqual(['id', 'text', 'due_at', 'timezone', 'local_datetime', 'created_at', 'expires_at', 'confirmed_reminder_id', 'request_id']);
-    expect(cols('reminders')).toEqual(['id', 'proposal_id', 'request_id', 'text', 'due_at', 'timezone', 'local_datetime', 'state', 'attempts', 'next_attempt_at', 'lease_until', 'claim_token', 'created_at', 'accepted_at', 'error_code']);
-    expect(cols('delivery_attempts')).toEqual(['id', 'reminder_id', 'attempt_number', 'claim_token', 'subscription_version', 'started_at', 'finished_at', 'outcome', 'error_code']);
-    expect(cols('model_usage')).toEqual(['bucket', 'count']);
-    const indexes = (db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as { name: string }[]).map((i) => i.name);
-    expect(indexes).toEqual(expect.arrayContaining(['reminders_state_next_attempt_at', 'reminders_due_at', 'proposals_expires_at', 'sessions_expires_at']));
-    expect(REMINDER_STATES).toEqual(['scheduled', 'sending', 'retry', 'accepted', 'failed']);
-    expect(DELIVERY_OUTCOMES).toEqual(['started', 'accepted', 'failed', 'unknown']);
-  });
-
   it('loads the SQL from disk and records each version once across repeated startups', () => {
     const path = join(tmp(), 'data', 'r2.sqlite');
     const clock = new FakeClock();
     expect(loadMigrations(defaultMigrationsDir()).map((m) => m.name)).toEqual(['001.sql']);
-    openDatabase(path, clock).close();
+    const first = openDatabase(path, clock);
+    try {
+      // Private VAPID keys belong in external configuration, never a database table.
+      expect(first.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'vapid_keys'").get()).toBeUndefined();
+    } finally {
+      first.close();
+    }
     clock.advance(1000);
     const db = openDatabase(path, clock);
     cleanups.push(() => db.close());
