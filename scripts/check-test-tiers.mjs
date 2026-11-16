@@ -3,7 +3,9 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 
-// Collect real expanded cases (including it.each), without running their bodies.
+// Collect real expanded runnable cases (including it.each), without running
+// their bodies. Vitest list omits skipped cases; the existing root-only skip
+// retains commit ownership in acceptance-state.test.ts (see testing-tiers.md).
 // Compare discovery, not a frozen test count: concurrent additions stay protected.
 const collect = (tier) => {
   const cases = JSON.parse(execFileSync(process.execPath, [
@@ -42,4 +44,5 @@ for (const path of readdirSync('tests', { recursive: true })) {
 }
 const smoke = collect('smoke');
 assert(smoke.length > 0 && smoke.every(test => owners.get(key(test)) === 'nightly'), 'Smoke must be a nonempty nightly subset');
-console.log(`Exhaustive partition verified: ${all.length} cases; smoke: ${smoke.length} (nightly subset).`);
+console.log(`Exhaustive runnable partition verified: ${all.length} cases; smoke: ${smoke.length} (nightly subset).`);
+console.log('Vitest list omits skipped cases; see docs/testing-tiers.md for the existing root-only ownership case.');

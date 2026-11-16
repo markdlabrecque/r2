@@ -16,7 +16,7 @@ Use Node 24.20.0 and `npm ci`.
 | `npm run test:nightly` | Every `tests/**/*.nightly.test.ts` | Nightly |
 | `npm run test:smoke` | `tests/artifact.nightly.test.ts` only; intentional nightly subset | Explicit installed-build check after build |
 | `npm run test:all` | Every `tests/**/*.test.ts`, including all three tiers | Local full verification, not an extra duplicated CI run |
-| `npm run test:inventory` | Collect actual expanded cases and verify the three tiers are a disjoint exhaustive partition, every test file is discovered, smoke is a nonempty nightly subset | Every push, PR and nightly |
+| `npm run test:inventory` | Collect actual expanded runnable cases and verify the three tiers are a disjoint exhaustive partition, every test file is discovered, smoke is a nonempty nightly subset | Every push, PR and nightly |
 | `npm run test:browser` | Both `browser/**/*.spec.ts` and `e2e/**/*.spec.ts` via unchanged Playwright config | PR and nightly |
 
 The exact job ID/name **`tests`** remains the single required gate. No
@@ -46,7 +46,7 @@ inventory command uses file-local case ordinals because existing parameterized
 display names can duplicate or contain fresh UUIDs. It checks multiplicity, not
 a deduplicated set of names. Browser discovery is separate and unchanged.
 
-| File under `tests/` | Cases | Owner (all cases) / protected failure |
+| File under `tests/` | Runnable cases | Owner (all cases) / protected failure |
 | --- | ---: | --- |
 | `acceptance-api.test.ts` | 5 | Commit integration: synthetic HTTPS API, authentication, bounded errors and redaction |
 | `acceptance-cases.test.ts` | 6 | Commit integration: synthetic approval/case submission and truthful observation gates |
@@ -75,6 +75,12 @@ a deduplicated set of names. Browser discovery is separate and unchanged.
 | `server-cleanup.nightly.test.ts` | 2 | Nightly: actual synthetic HTTPS listener cleanup with idle and active connections; races a real 1-second deadline |
 | `web.nightly.test.ts` | 3 | Nightly: existing jsdom refresh/status/error outcomes; still uses a real 20-ms readiness wait, so it is not misrepresented as deterministic commit coverage |
 | **Total** | **495** | **462 commit + 25 functional + 8 nightly** |
+
+Vitest `list` omits skipped cases. The additional existing case
+`acceptance-state.test.ts > paths and ownership > rejects foreign ownership`
+is also commit-owned; it runs only as root. In this non-root environment that
+means **496 total = 495 passes + 1 existing skip** (commit: 462 passes + 1 skip).
+The injected-stat non-root counterpart runs. No new skip was introduced.
 
 Playwright owners (one case each):
 
@@ -145,8 +151,14 @@ Local mutation probes (reverted before committing):
    owner: `npm run test:inventory` fails, tier union **481 vs 495**. Restoring
    discovery verifies the partition again.
 
-Full-suite results, exact-head CI and final rebase evidence are recorded in the
-linked implementation PR/issue. The only conditional skip remains the existing
+Measured pre-PR run after incorporating #41/#42/#44/#45: locked install,
+typecheck and build passed; commit 462 passed + 1 existing skip (16.84 s),
+functional 25 passed (4.05 s), nightly 8 passed (0.530 s), explicit smoke 1 passed
+(0.514 s), all 495 passed + 1 existing skip (16.05 s), inventory 495 runnable
+cases partitioned, Chromium 2 passed (7.7 s). All new commands executed.
+
+Final-head full-suite results, exact-head CI and subsequent rebase evidence are
+recorded in the linked implementation PR/issue. The only conditional skip remains the existing
 root-only foreign-ownership case; its injected-stat non-root counterpart runs.
 Filtered mutation runs naturally exclude unrelated cases; these are not new
 suite skips.
