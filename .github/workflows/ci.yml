@@ -3,7 +3,8 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+  schedule:
+    - cron: '23 4 * * *'
 
 permissions:
   contents: read
@@ -23,16 +24,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f src/main.ts ]; then
-            npm run typecheck
-            npm run build
-            npm test
-          fi
+          npm run typecheck
+          npm run build
+          npm test
+          npm run test:inventory
+      - name: Deterministic functional checks
+        if: github.event_name == 'pull_request' || github.event_name == 'schedule'
+        run: npm run test:functional
+      - name: Timing-sensitive process checks
+        if: github.event_name == 'schedule'
+        run: npm run test:nightly
       - name: Chromium browser tests
+        if: github.event_name == 'pull_request' || github.event_name == 'schedule'
         shell: bash
         run: |
           set -euo pipefail
-          if [ -f playwright.config.ts ]; then
-            npx --no-install playwright install --with-deps chromium
-            npm run test:browser
-          fi
+          npx --no-install playwright install --with-deps chromium
+          npm run test:browser

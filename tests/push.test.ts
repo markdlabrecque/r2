@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { generateVAPIDKeys } from 'web-push';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SESSION_COOKIE, authPlugin } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import type { PushResult, PushSubscriptionKeys, PushTransport } from '../src/contracts.ts';
@@ -105,7 +105,35 @@ describe('web push transport', () => {
     expect(seen[0]!.options.agent).toBeDefined();
   });
 
-  it('maps provider errors, timeouts and connection failures; refuses unsafe input before any request', async () => {
+  it('expires a stalled send at the controlled deadline and clears the deadline timer', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const pending = transport(() => new Promise(() => undefined), { deadlineMs: 20 }).send(KEYS, 'rem_1');
+      let settled = false;
+      void pending.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(19);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toEqual({ outcome: 'failed', code: 'network', retryable: true });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the unused deadline after an early provider success or failure', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      expect(await transport(async () => ({ statusCode: 201 })).send(KEYS, 'rem_1')).toMatchObject({ outcome: 'accepted' });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(await transport(async () => { throw new Error('offline'); }).send(KEYS, 'rem_1')).toMatchObject({ code: 'network' });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('maps provider errors and connection failures; refuses unsafe input before any request', async () => {
     let calls = 0;
     const fail = (error: unknown) =>
       transport(async () => {
@@ -115,9 +143,6 @@ describe('web push transport', () => {
     expect(await fail(Object.assign(new Error('gone'), { statusCode: 410 })).send(KEYS, 'rem_1')).toMatchObject({ code: 'subscription_gone', retryable: false });
     expect(await fail(Object.assign(new Error('busy'), { statusCode: 503 })).send(KEYS, 'rem_1')).toMatchObject({ code: 'temporary', retryable: true });
     expect(await fail(new Error('ECONNRESET')).send(KEYS, 'rem_1')).toMatchObject({ code: 'network', retryable: true });
-
-    const hang = transport(() => new Promise(() => undefined), { deadlineMs: 20 });
-    expect(await hang.send(KEYS, 'rem_1')).toMatchObject({ code: 'network', retryable: true });
 
     calls = 0;
     const t = fail(new Error('should not be called'));

@@ -3,34 +3,20 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { authPlugin } from '../src/auth.ts';
 import { chatPlugin } from '../src/chat.ts';
 import { loadConfig } from '../src/config.ts';
-import type { PushResult, PushSubscriptionKeys, PushTransport } from '../src/contracts.ts';
+import type { PushResult, PushTransport } from '../src/contracts.ts';
 import { openStorage, type SqliteStorage } from '../src/db.ts';
 import { hashPassword } from '../src/password.ts';
 import { createApp } from '../src/routes.ts';
-import { startService } from '../src/service.ts';
 import { statusPlugin } from '../src/status.ts';
 import { DeliveryWorker } from '../src/worker.ts';
 import { FakeClock, syntheticEnv, tempDir } from './helpers.ts';
 
-const KEYS: PushSubscriptionKeys = {
-  endpoint: 'https://updates.push.services.mozilla.com/wpush/v2/synthetic',
-  p256dh: Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 7)]).toString('base64url'),
-  auth: Buffer.alloc(16, 9).toString('base64url'),
-};
+import { FakeTransport, KEYS } from './worker-fixtures.ts';
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c();
 });
-
-class FakeTransport implements PushTransport {
-  sent: { reminderId: string; endpoint: string }[] = [];
-  results: PushResult[] = [];
-  async send(sub: PushSubscriptionKeys, reminderId: string): Promise<PushResult> {
-    this.sent.push({ reminderId, endpoint: sub.endpoint });
-    return this.results.shift() ?? { outcome: 'accepted', httpStatus: 201 };
-  }
-}
 
 function setup(opts: { transport?: PushTransport | undefined; subscribe?: boolean } = {}) {
   const t = tempDir();
@@ -276,48 +262,6 @@ describe('crash recovery', () => {
     expect(s.transport.sent).toEqual([]);
   });
 });
-
-describe('restart, end to end, without OpenAI', () => {
-  it('delivers a reminder saved before restart, with chat disabled and an overdue due time', async () => {
-    const t = tempDir();
-    cleanups.push(t.cleanup);
-    const dir = join(t.dir, 'data');
-    const clock = new FakeClock();
-    const hash = await hashPassword('correct horse battery staple', { ln: 10, r: 8, p: 1 });
-    const env = syntheticEnv(dir, { R2_PASSWORD_HASH: hash });
-    const transport = new FakeTransport();
-
-    const first = await startService(env, { clock, logger: false, adapters: { webRoot: join(t.dir, 'none') } });
-    first.storage.setTimezone('UTC');
-    const subscription = first.storage.replaceSubscription(KEYS);
-    expect(first.storage.markSubscriptionReady(subscription.version)).toBe(true);
-    const readySubscription = first.storage.getSubscription();
-    expect(readySubscription).toMatchObject({ ...KEYS, version: subscription.version, readyAt: clock.now() });
-    const p = first.storage.storeProposal({ text: 'take the bins out', dueAt: clock.now() + 5 * 60_000, timezone: 'UTC', localDateTime: '2026-10-14T12:05', expiresAt: clock.now() + 5 * 60_000 });
-    const reminder = first.storage.confirmProposal(p.id, 'request-0001');
-    await first.stop();
-
-    clock.advance(30 * 60_000); // due while the service was down
-    const second = await startService(env, { clock, logger: false, adapters: { webRoot: join(t.dir, 'none'), pushTransport: transport } });
-    cleanups.push(() => second.stop());
-    expect(second.config.chat.enabled).toBe(false);
-    expect(second.storage.getSubscription()).toEqual(readySubscription);
-    await waitFor(() => second.storage.getReminder(reminder.id)?.state === 'accepted');
-    expect(transport.sent.map((x) => x.reminderId)).toEqual([reminder.id]);
-    expect(second.storage.getReminder(reminder.id)).toMatchObject({ dueAt: reminder.dueAt, localDateTime: reminder.localDateTime, state: 'accepted', attempts: 1, acceptedAt: clock.now() });
-    expect(second.storage.listDeliveryAttempts(reminder.id)).toEqual([
-      expect.objectContaining({ reminderId: reminder.id, attemptNumber: 1, subscriptionVersion: subscription.version, outcome: 'accepted', startedAt: clock.now(), finishedAt: clock.now(), errorCode: null }),
-    ]);
-  });
-});
-
-async function waitFor(check: () => boolean, ms = 3000): Promise<void> {
-  const end = Date.now() + ms;
-  while (!check()) {
-    if (Date.now() > end) throw new Error('timed out');
-    await new Promise((r) => setTimeout(r, 20));
-  }
-}
 
 describe('status and pause routes', () => {
   const ORIGIN = 'https://r2.example.ts.net';
