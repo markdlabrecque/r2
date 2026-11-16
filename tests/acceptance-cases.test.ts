@@ -38,6 +38,11 @@ async function setup() {
     return new Response(res.body, { status: res.statusCode, headers });
   };
   const api = new AcceptanceApi('https://r2.example.ts.net', { fetch: transport }); await api.login(password);
+  expect(sameSubscription(await api.push(), await api.push())).toBe(false);
+  const sub = storage.replaceSubscription({ endpoint: 'https://example.invalid/push', p256dh: 'synthetic', auth: 'synthetic' });
+  // Synthetic acceptance only; real push readiness routing is owned by chat/push integration tests.
+  const pushTransport = { send: async () => ({ outcome: 'accepted' as const }) };
+  if ((await pushTransport.send()).outcome === 'accepted') storage.markSubscriptionReady(sub.version);
   const lease = f.registry.acquire(installation, f.owner); lease.create(f.state);
   return { api, lease, storage, clock, cases: new AcceptanceCases(api, lease, clock), wrong: () => { wrong = true; }, clarify: () => { clarify = true; }, loseConfirm: () => { loseConfirm = true; }, loseModel: () => { loseModel = true; } };
 }
@@ -58,7 +63,7 @@ it('uses actual authenticated routes, journals real IDs and replays a lost confi
   expect(x.storage.listReminders()).toHaveLength(1);
   expect((await findKnown(x.api, r.id))?.id).toBe(r.id);
   expect(await proposalInList(x.api, r.proposalId)).toBe('found');
-  expect(sameSubscription(await x.api.push(), await x.api.push())).toBe(false);
+  expect(sameSubscription(await x.api.push(), await x.api.push())).toBe(true);
   const report = jsonReport(x.lease.load()); expect(report).not.toContain(plan.text); expect(report).not.toContain('synthetic-password-canary');
   await x.api.logout(); await expect(x.api.settings()).rejects.toMatchObject({ code: 'unauthorized' });
 });

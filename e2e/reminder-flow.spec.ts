@@ -92,6 +92,15 @@ test('log in, set timezone, chat, double-save, restart: exactly one reminder per
     await expect(page.locator('#reminders')).toContainText('No reminders yet');
 
     expect(svc!.storage.listReminders()).toHaveLength(0);
+    await expect(page.locator('#confirm-status')).toContainText('Before saving, connect a browser');
+    await page.click('#confirm');
+    await expect(page.locator('#confirm-status')).toContainText('Connect a browser and send a successful test notification');
+    await expect(page.locator('#proposal')).toBeVisible();
+    await expect(page.locator('#reminders')).toContainText('No reminders yet');
+    const sub = svc!.storage.replaceSubscription({ endpoint: 'https://example.invalid/push', p256dh: 'synthetic', auth: 'synthetic' });
+    // Synthetic provider acceptance, not evidence of desktop display.
+    const transport = { send: async () => ({ outcome: 'accepted' as const }) };
+    if ((await transport.send()).outcome === 'accepted') svc!.storage.markSubscriptionReady(sub.version);
 
     // Hold the first save until the second click sends its request. Neither
     // response can hide the proposal before both real network writes exist.
