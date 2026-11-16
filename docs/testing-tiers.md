@@ -56,12 +56,13 @@ a deduplicated set of names. Browser discovery is separate and unchanged.
 | `acceptance-report.test.ts` | 10 | Commit: bounded/redacted JSON/Markdown evidence and honest verdicts |
 | `acceptance-runner.test.ts` | 155 | Commit integration: injected waits, approvals, cancellation, model restoration, retry/recovery, secrets and distinct provider/display outcomes |
 | `acceptance-state.test.ts` | 35 | Commit integration: real private filesystem/journal/lock storage, ownership, atomic writes, malformed inputs and recovery; separate-process case moved below |
-| `app.test.ts` | 10 | Commit integration: Fastify injection, health privacy, headers, errors, plugins/adapters, body limits and loopback proxy trust |
-| `auth.test.ts` | 12 | Commit integration: owner access, sessions, CSRF and HTTP rate-limit mapping |
+| `app.test.ts` | 9 | Commit integration: Fastify injection, health privacy, headers, errors, plugins/adapters, body limits and loopback proxy trust |
+| `auth.test.ts` | 11 | Commit integration: owner access, sessions, CSRF and HTTP rate-limit mapping |
 | `chat.test.ts` | 11 | Commit integration: model/proposal/confirmation, limits and durable/idempotent storage wiring |
 | `config.test.ts` | 12 | Commit: safe configuration, paths, credentials and VAPID persistence |
 | `packaging.test.ts` | 2 | Commit: systemd/example/documentation contract, not installed host acceptance |
 | `policy.test.ts` | 3 | Commit units: throttle reset/window and safe DTO projection (concurrent #44 protection) |
+| `push-dns.test.ts` | 4 | Commit unit/integration: synthetic resolver filtering/all-mode/errors, real HTTPS lookup fails closed before TCP, and real adapter redirect handling; no live DNS/provider (concurrent #47 protection) |
 | `push.test.ts` | 14 | Commit unit/integration: endpoint/address/status rules, controlled transport deadlines/cleanup, synthetic push API/readiness |
 | `storage.test.ts` | 26 | Commit integration: real SQLite constraints, migration/rollback, sessions, durable state and cross-connection leases (concurrent #41/#42 protection) |
 | `sw.test.ts` | 2 | Commit: VM service-worker payload/display/click policy |
@@ -74,12 +75,12 @@ a deduplicated set of names. Browser discovery is separate and unchanged.
 | `artifact.nightly.test.ts` | 1 | Nightly: installed artifact/cwd/assets/health/SIGTERM process smoke; unresolved port allocation/polling |
 | `server-cleanup.nightly.test.ts` | 2 | Nightly: actual synthetic HTTPS listener cleanup with idle and active connections; races a real 1-second deadline |
 | `web.nightly.test.ts` | 3 | Nightly: existing jsdom refresh/status/error outcomes; still uses a real 20-ms readiness wait, so it is not misrepresented as deterministic commit coverage |
-| **Total** | **495** | **462 commit + 25 functional + 8 nightly** |
+| **Total** | **497** | **464 commit + 25 functional + 8 nightly** |
 
 Vitest `list` omits skipped cases. The additional existing case
 `acceptance-state.test.ts > paths and ownership > rejects foreign ownership`
 is also commit-owned; it runs only as root. In this non-root environment that
-means **496 total = 495 passes + 1 existing skip** (commit: 462 passes + 1 skip).
+means **498 total = 497 passes + 1 existing skip** (commit: 464 passes + 1 skip).
 The injected-stat non-root counterpart runs. No new skip was introduced.
 
 Playwright owners (one case each):
@@ -106,7 +107,15 @@ passing application case.
   `service.functional.test.ts`, retaining real bind/occupied/released-port,
   database-close, worker-stop, persisted restart and redacted-log assertions.
   `built service` moved to `artifact.nightly.test.ts`; it no longer skips for
-  missing build artifacts. No browser journey was removed.
+  missing build artifacts. The merged #43 consolidation is preserved: no
+  standalone duplicate worker-lifecycle/auth-health cases or second child launch
+  are restored. The shutdown survivor retains before-ready and once-only stop
+  assertions. Removed smoke timezone write/relaunch/readback remains owned by
+  `service.functional.test.ts > starts with no credentials, binds only loopback,
+  stops and restarts on the same data` and the real SQLite reopen cases in
+  `storage.test.ts`. Generic public health remains in the unauthenticated access
+  case in `auth.test.ts` and health privacy cases in `app.test.ts`. No browser
+  journey was removed.
 - `worker.test.ts > restart, end to end, without OpenAI` moved to
   `restart.functional.test.ts`. The polling helper is deleted, not retained
   alongside a duplicate. Timer-only virtualization drives the real default
