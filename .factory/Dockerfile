@@ -18,7 +18,12 @@ ARG AGENT_UID=1000
 ARG AGENT_GID=1000
 RUN groupmod -o -g "$AGENT_GID" node \
     && usermod -o -u "$AGENT_UID" -g "$AGENT_GID" -d /home/agent -m -l agent node
+# Project-owned snapshot, discoverable by Pi without host skill mounts.
+COPY --chown=${AGENT_UID}:${AGENT_GID} skills/writing-tests/ /home/agent/.agents/skills/writing-tests/
 USER ${AGENT_UID}:${AGENT_GID}
+# The bundled Pi discovers its user skills here; retain one copy of the content.
+RUN mkdir -p /home/agent/.pi/agent/skills \
+    && ln -s /home/agent/.agents/skills/writing-tests /home/agent/.pi/agent/skills/writing-tests
 ENV PATH="/home/agent/.local/bin:$PATH"
 WORKDIR /home/agent
 ENTRYPOINT ["sleep", "infinity"]

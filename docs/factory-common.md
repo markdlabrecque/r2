@@ -6,6 +6,10 @@ Read `AGENTS.md`, `PRD.md`, the current task ticket and the approved plan at
 The sandbox has Node 24, native SQLite build tools, Pi and global Playwright with
 shared Chromium. Startup runs `npm ci` in the mounted checkout. Project packages
 remain owned by `package-lock.json`; keep Factory runtime dependencies out of it.
+Before writing, changing, deleting or reviewing tests, fixtures or test
+configuration, read `/home/agent/.agents/skills/writing-tests/SKILL.md`. The image
+includes this skill; it does not require host skill mounts.
+
 Use synthetic data, injected clocks, model adapters and push transports. Real
 Firefox/Tailscale notification acceptance needs owner evidence; mocked delivery
 is not that evidence. Keep production systems and credentials out of tests.

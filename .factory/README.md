@@ -9,6 +9,12 @@ is in `../docs/factory-common.md`. No workflow code is copied into this repo.
 - Automatic squash merge requires Factory gates and the exact CI job `tests`.
 - The image is `r2-factory`, with Node 24.20.0, Pi 1.5.2 and Playwright 1.65.0.
 - Startup installs locked application dependencies with `npm ci` as non-root.
+- `skills/writing-tests/SKILL.md` is a project-owned snapshot of
+  `~/.agents/skills/writing-tests/SKILL.md`, installed in the image at
+  `/home/agent/.agents/skills/writing-tests/SKILL.md`, with a symlink from
+  `/home/agent/.pi/agent/skills/writing-tests` for bundled Pi discovery. To refresh
+  it, copy the reviewed host skill into that build-context path and rebuild the
+  image. Host skill edits do not automatically update this snapshot.
 - `.env` is private and ignored. Standard sandboxes do not receive GitHub tokens.
 
 ## Operator commands

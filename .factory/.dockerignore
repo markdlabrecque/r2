@@ -1,3 +1,6 @@
 *
 !Dockerfile
 !.dockerignore
+!skills/
+!skills/writing-tests/
+!skills/writing-tests/SKILL.md
