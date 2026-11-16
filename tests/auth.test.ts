@@ -121,6 +121,9 @@ describe('protected API access', () => {
     const put = await app.inject({ method: 'PUT', url: '/api/settings', headers: write, payload: { timezone: 'UTC' } });
     expect(put.statusCode).toBe(401);
     expect(storage.getSettings().timezone).toBe('America/Toronto');
+    const health = await app.inject('/healthz');
+    expect(health.statusCode).toBe(200);
+    expect(health.json()).toEqual({ status: 'ok' });
   });
 
   it('is closed by default: an /api route a feature forgets to protect still needs a session, unless it opts out', async () => {
@@ -159,10 +162,6 @@ describe('protected API access', () => {
     expect(res.headers['set-cookie']).toBeUndefined();
   });
 
-  it('keeps /healthz public and generic', async () => {
-    const { app } = await setup();
-    expect((await app.inject('/healthz')).json()).toEqual({ status: 'ok' });
-  });
 });
 
 describe('timezone settings', () => {
