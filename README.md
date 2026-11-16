@@ -31,7 +31,12 @@ Node.js 24. R2 binds only to `127.0.0.1` (default port 3000) and needs no real c
 npm ci
 npm run typecheck
 npm run build        # dist/server (with migrations/) and dist/web
-npm test
+npm test # commit-tier unit/integration checks
+npm run test:functional # deterministic service/CLI wiring (PRs/nightly)
+npm run test:nightly # timing-sensitive process/PTY checks; build first
+npm run test:smoke # explicit artifact smoke; fails without a build
+npm run test:inventory # verify exhaustive, disjoint Vitest tier ownership
+npm run test:all # all Vitest tiers; build first
 npm run test:browser # synthetic Chromium journeys; build first
 
 # Run locally with synthetic values. R2_ORIGIN must be a single https origin and
@@ -39,6 +44,9 @@ npm run test:browser # synthetic Chromium journeys; build first
 R2_ORIGIN=https://r2.example.ts.net R2_DATA_DIR=/tmp/r2-data npm run dev
 R2_ORIGIN=https://r2.example.ts.net R2_DATA_DIR=/tmp/r2-data npm start
 ```
+
+See [execution tiers and exhaustive test ownership](docs/testing-tiers.md) for CI
+scheduling, retained assertions and remaining owner acceptance gates.
 
 Configuration: `R2_ORIGIN` and `R2_DATA_DIR` (required); `R2_PORT` (3000), `R2_SESSION_TTL_HOURS` (168), `R2_PAUSE_NOTIFICATIONS` (false); optional `R2_PASSWORD_HASH`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, `OPENAI_API_KEY`, `OPENAI_MODEL`. Missing auth, VAPID or model values leave that feature disabled and do not stop the service. `test:browser` runs the two synthetic Chromium journeys in `browser/` and `e2e/`.
 

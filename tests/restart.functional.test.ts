@@ -22,6 +22,7 @@ describe('restart, end to end, without OpenAI', () => {
     const transport = new FakeTransport();
 
     const first = await startService(env, { clock, logger: false, adapters: { webRoot: join(t.dir, 'none') } });
+    cleanups.push(() => first.stop());
     first.storage.setTimezone('UTC');
     const subscription = first.storage.replaceSubscription(KEYS);
     expect(first.storage.markSubscriptionReady(subscription.version)).toBe(true);

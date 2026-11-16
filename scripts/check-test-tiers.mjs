@@ -9,14 +9,15 @@ const collect = (tier) => {
   const cases = JSON.parse(execFileSync(process.execPath, [
     'node_modules/vitest/vitest.mjs', 'list', '--json', '--staticParse=false',
   ], { encoding: 'utf8', env: { ...process.env, R2_TEST_TIER: tier }, maxBuffer: 8 * 1024 * 1024 }));
-  // Existing parameterized cases can have equal display names. Preserve their
-  // multiplicity instead of collapsing them or inventing duplicate ownership.
+  // File-local declaration order identifies expanded cases: existing it.each
+  // names may duplicate or embed a fresh randomUUID on each collection. There
+  // are no case-name filters in any tier, so ordinals are stable across tiers.
   const occurrences = new Map();
   return cases.map(test => {
-    const base = `${relative(process.cwd(), test.file)} > ${test.name}`;
-    const n = (occurrences.get(base) ?? 0) + 1;
-    occurrences.set(base, n);
-    return { ...test, id: `${base} [${n}]` };
+    const file = relative(process.cwd(), test.file);
+    const n = (occurrences.get(file) ?? 0) + 1;
+    occurrences.set(file, n);
+    return { ...test, id: `${file} [case ${n}]` };
   });
 };
 const key = (test) => test.id;
