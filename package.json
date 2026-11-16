@@ -13,11 +13,9 @@
     "start": "node dist/server/main.js",
     "typecheck": "tsc -p tsconfig.json && tsc -p web/tsconfig.json && tsc -p web/tsconfig.sw.json",
     "test": "vitest run",
-    "test:browser": "playwright test",
-    "test:factory": "node --test .sandcastle/setup.test.mts"
+    "test:browser": "playwright test"
   },
   "devDependencies": {
-    "@ai-hero/sandcastle": "0.14.0",
     "@playwright/test": "1.65.0",
     "@types/better-sqlite3": "9.6.0",
     "@types/jsdom": "30.0.0",

@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, spike-1]
+    branches: [main]
 
 permissions:
   contents: read
@@ -19,8 +19,6 @@ jobs:
           node-version: 24.20.0
           cache: npm
       - run: npm ci
-      - name: Factory configuration tests
-        run: npm run test:factory
       - name: Application checks
         shell: bash
         run: |
