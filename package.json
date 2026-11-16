@@ -18,6 +18,7 @@
     "test:nightly": "R2_TEST_TIER=nightly vitest run",
     "test:smoke": "R2_TEST_TIER=smoke vitest run",
     "test:all": "R2_TEST_TIER=all vitest run",
+    "test:inventory": "node scripts/check-test-tiers.mjs",
     "test:browser": "playwright test"
   },
   "devDependencies": {
