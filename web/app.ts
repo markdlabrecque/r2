@@ -116,6 +116,7 @@ function showProposal(proposal: Proposal | undefined, utcOffset = ''): void {
   }
   // One request id per proposal: a retried confirmation cannot create a second reminder.
   pending = { proposal, requestId: newRequestId() };
+  $('confirm-status').textContent = 'Before saving, connect a browser and send a successful test notification in Notifications.';
   $('proposal-text').textContent = proposal.text;
   $('proposal-when').textContent = `${proposal.localDateTime.replace('T', ' ')} ${proposal.timezone}${utcOffset === '' ? '' : ` (UTC${utcOffset})`} · one time only`;
 }

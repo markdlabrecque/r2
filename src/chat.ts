@@ -104,7 +104,7 @@ export const chatPlugin: FeaturePlugin = {
       const body = confirmBody.safeParse(request.body);
       if (!body.success) throw new R2Error('invalid_request', 'Confirm with a proposal id and a request id.');
       storage.expireProposals();
-      const reminder = storage.confirmProposal(body.data.proposalId, body.data.requestId);
+      const reminder = storage.confirmProposal(body.data.proposalId, body.data.requestId, true);
       return { reminder: toReminderDto(reminder) };
     });
 

@@ -1,17 +1,24 @@
 import { join } from 'node:path';
+import { generateVAPIDKeys } from 'web-push';
 import { afterEach, describe, expect, it } from 'vitest';
 import { authPlugin } from '../src/auth.ts';
 import { chatPlugin, DAILY_MODEL_LIMIT } from '../src/chat.ts';
 import { loadConfig } from '../src/config.ts';
-import type { ModelInterpreter, ModelOutcome } from '../src/contracts.ts';
+import type { ModelInterpreter, ModelOutcome, PushResult } from '../src/contracts.ts';
 import { openStorage } from '../src/db.ts';
 import { createInterpreter, parseOutcome } from '../src/openai.ts';
 import { resolveLocalTime } from '../src/reminders.ts';
 import { hashPassword } from '../src/password.ts';
 import { createApp } from '../src/routes.ts';
 import { settingsPlugin } from '../src/settings.ts';
+import { pushPlugin } from '../src/push-routes.ts';
 import { FakeClock, syntheticEnv, tempDir } from './helpers.ts';
 
+const vapid = generateVAPIDKeys();
+const subscription = {
+  endpoint: 'https://updates.push.services.mozilla.com/wpush/v2/synthetic-token',
+  keys: { p256dh: Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 7)]).toString('base64url'), auth: Buffer.alloc(16, 9).toString('base64url') },
+};
 const PASSWORD = 'correct horse battery staple';
 const ORIGIN = 'https://r2.example.ts.net';
 const headers = { origin: ORIGIN, 'content-type': 'application/json' };
@@ -37,11 +44,18 @@ async function setup(dataDir?: string, model: ModelInterpreter | null = new Fake
   const dir = dataDir ?? join(t.dir, 'data');
   const clock = new FakeClock();
   const hash = await hashPassword(PASSWORD, { ln: 10, r: 8, p: 1 });
-  const config = loadConfig(syntheticEnv(dir, { R2_PASSWORD_HASH: hash }));
+  const config = loadConfig(syntheticEnv(dir, {
+    R2_PASSWORD_HASH: hash, VAPID_PUBLIC_KEY: vapid.publicKey, VAPID_PRIVATE_KEY: vapid.privateKey,
+    VAPID_SUBJECT: 'mailto:synthetic@example.invalid',
+  }));
+  let pushResult: PushResult = { outcome: 'accepted' };
+  let duringPush = () => {};
   const storage = openStorage(config.dbPath, clock);
   const app = createApp(
-    { config, storage, clock, logger: false, webRoot: join(t.dir, 'none'), ...(model ? { modelInterpreter: model } : {}) },
-    [authPlugin, settingsPlugin, chatPlugin],
+    { config, storage, clock, logger: false, webRoot: join(t.dir, 'none'),
+      pushTransport: { send: async () => { duringPush(); return pushResult; } },
+      ...(model ? { modelInterpreter: model } : {}) },
+    [authPlugin, settingsPlugin, chatPlugin, pushPlugin],
   );
   cleanups.push(async () => {
     await app.close();
@@ -52,7 +66,13 @@ async function setup(dataDir?: string, model: ModelInterpreter | null = new Fake
   const post = (url: string, payload: unknown) =>
     app.inject({ method: 'POST', url, headers: { ...headers, cookie }, payload: payload as object });
   const get = (url: string) => app.inject({ method: 'GET', url, headers: { cookie } });
-  return { app, storage, clock, model, post, get, dir, cookie };
+  const connect = () => app.inject({ method: 'PUT', url: '/api/push/subscription', headers: { ...headers, cookie }, payload: subscription });
+  const ready = async () => {
+    expect((await connect()).statusCode).toBe(200);
+    expect((await post('/api/push/test', {})).json()).toMatchObject({ ok: true, subscription: { ready: true } });
+  };
+  return { app, storage, clock, model, post, get, dir, cookie, connect, ready,
+    pushResult: (result: PushResult) => { pushResult = result; }, duringPush: (fn: () => void) => { duringPush = fn; } };
 }
 
 describe('resolveLocalTime', () => {
@@ -136,8 +156,36 @@ describe('chat and confirmation', () => {
     expect(s.storage.listReminders()).toEqual([]);
 
     const body = { proposalId: chat.proposal.id, requestId: 'request-0001' };
-    const first = (await s.post('/api/reminders/confirm', body)).json();
+    const rejectUnready = async () => {
+      const before = s.storage.getProposal(body.proposalId);
+      const response = await s.post('/api/reminders/confirm', body);
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.message).toMatch(/connect.*test/i);
+      expect(s.storage.listReminders()).toEqual([]);
+      expect(s.storage.getProposal(body.proposalId)).toEqual(before);
+    };
+    await rejectUnready(); // missing
+    expect((await s.connect()).statusCode).toBe(200);
+    await rejectUnready(); // untested
+    s.pushResult({ outcome: 'failed', retryable: true, code: 'network' });
+    expect((await s.post('/api/push/test', {})).json().ok).toBe(false);
+    await rejectUnready(); // failed test
+    s.pushResult({ outcome: 'accepted' });
+    await s.ready();
+    await s.connect();
+    await rejectUnready(); // replacing even identical keys resets readiness
+    s.duringPush(() => { s.storage.replaceSubscription({ endpoint: subscription.endpoint, ...subscription.keys }); });
+    expect((await s.post('/api/push/test', {})).json()).toMatchObject({ ok: false, code: 'replaced' });
+    await rejectUnready(); // an accepted test for an old version cannot ready the replacement
+    s.duringPush(() => {});
+    expect((await s.post('/api/push/test', {})).json().ok).toBe(true);
+    const response = await s.post('/api/reminders/confirm', body);
+    expect(response.statusCode).toBe(200);
+    const first = response.json();
+    await s.connect();
     const again = (await s.post('/api/reminders/confirm', body)).json();
+    const differentRequest = (await s.post('/api/reminders/confirm', { ...body, requestId: 'request-other' })).json();
+    expect(differentRequest.reminder.id).toBe(first.reminder.id);
     expect(again.reminder.id).toBe(first.reminder.id);
     expect(first.reminder).toMatchObject({ state: 'scheduled', localDateTime: '2026-10-15T19:00', timezone: 'America/Toronto' });
     expect(first.reminder).not.toHaveProperty('claimToken');
@@ -165,11 +213,19 @@ describe('chat and confirmation', () => {
     first.storage.setTimezone('America/Toronto');
     (first.model as FakeModel).outcome = { type: 'one_off', text: 'Call dentist', localDateTime: '2026-10-20T09:30' };
     const chat = (await first.post('/api/chat', { message: 'dentist' })).json();
-    const saved = (await first.post('/api/reminders/confirm', { proposalId: chat.proposal.id, requestId: 'request-0003' })).json();
+    await first.ready();
+    const body = { proposalId: chat.proposal.id, requestId: 'request-0003' };
+    const saved = (await first.post('/api/reminders/confirm', body)).json();
+    await first.connect(); // readiness remains false across restart
     await first.app.close();
     first.storage.close();
 
     const second = await setup(first.dir, null);
+    for (const requestId of [body.requestId, 'request-after-restart']) {
+      const replay = await second.post('/api/reminders/confirm', { ...body, requestId });
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json().reminder).toEqual(saved.reminder);
+    }
     const list = (await second.get('/api/reminders')).json();
     expect(list.reminders.map((r: { id: string }) => r.id)).toEqual([saved.reminder.id]);
     const chatDown = await second.post('/api/chat', { message: 'anything' });

@@ -37,7 +37,9 @@ test('confirmed reminder survives restart and is submitted without a model', asy
     service = await startService(env, { clock, logger: false, adapters: { modelInterpreter: model, pushTransport: transport } });
     upstreamPort = service.port;
     // Synthetic subscription: this verifies submission, not browser push or notification display.
-    service.storage.replaceSubscription({ endpoint: 'https://example.invalid/push', p256dh: 'synthetic', auth: 'synthetic' });
+    const sub = service.storage.replaceSubscription({ endpoint: 'https://example.invalid/push', p256dh: 'synthetic', auth: 'synthetic' });
+    if ((await transport.send(sub, 'test')).outcome === 'accepted') service.storage.markSubscriptionReady(sub.version);
+    sends.length = 0;
     await page.goto(origin);
     expect(await page.evaluate(async () => (await fetch('/api/reminders')).status)).toBe(401);
     await page.locator('#password').fill('synthetic password');

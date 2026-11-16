@@ -340,7 +340,8 @@ export interface ReminderStore {
    * returns the original reminder whatever the request id. Reusing a request id for a
    * different proposal throws `request_id_conflict`. Success means the data is durable.
    */
-  confirmProposal(proposalId: string, requestId: string): Reminder;
+  /** requireReady checks the current tested subscription under the write lock for new saves only; successful replays bypass readiness. */
+  confirmProposal(proposalId: string, requestId: string, requireReady?: boolean): Reminder;
   getReminder(id: string): Reminder | undefined;
   /** Ordered by due time, then creation time. */
   listReminders(options?: { limit?: number }): Reminder[];

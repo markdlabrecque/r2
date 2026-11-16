@@ -390,7 +390,7 @@ export class SqliteStorage implements Storage {
 
   // reminders
 
-  readonly #confirm = (proposalId: string, requestId: string): Reminder => {
+  readonly #confirm = (proposalId: string, requestId: string, requireReady: boolean): Reminder => {
     const now = this.#clock.now();
     const proposal = this.db.prepare('SELECT * FROM proposals WHERE id = ?').get(proposalId) as ProposalRow | undefined;
     if (proposal === undefined) throw new R2Error('proposal_not_found', 'That proposal does not exist or has expired.');
@@ -408,6 +408,10 @@ export class SqliteStorage implements Storage {
     }
     if (proposal.expires_at <= now) throw new R2Error('proposal_expired', 'That proposal has expired. Ask for the reminder again.');
 
+    if (requireReady && this.getSubscription()?.readyAt == null) {
+      throw new R2Error('conflict', 'Connect a browser and send a successful test notification before saving a reminder.');
+    }
+
     const id = newId('rem');
     this.db
       .prepare(
@@ -419,11 +423,11 @@ export class SqliteStorage implements Storage {
     return toReminder(this.db.prepare('SELECT * FROM reminders WHERE id = ?').get(id) as ReminderRow);
   };
 
-  confirmProposal(proposalId: string, requestId: string): Reminder {
+  confirmProposal(proposalId: string, requestId: string, requireReady = false): Reminder {
     if (requestId === '') throw new R2Error('invalid_request', 'A confirmation needs a request id.');
     // IMMEDIATE takes the write lock up front, so two connections serialise. The commit
     // (synchronous=FULL) is durable before this method returns.
-    return this.db.transaction(this.#confirm).immediate(proposalId, requestId);
+    return this.db.transaction(this.#confirm).immediate(proposalId, requestId, requireReady);
   }
 
   getReminder(id: string): Reminder | undefined {
