@@ -13,5 +13,5 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["src", "tests"]
+  "include": ["src", "scripts/acceptance", "tests", "e2e", "browser", "playwright.config.ts"]
 }

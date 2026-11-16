@@ -20,7 +20,7 @@ The owner accepted Chromium delivery as satisfying the browser-delivery requirem
 | Chromium | A desktop notification arrived. The owner described being prompted to sign in to R2 and read it. |
 | Zen Browser | The owner confirmed that the same test worked. |
 
-The notification is generic. The service worker displays title `You have an R2 reminder` and body `Open R2 and sign in to read it.` Reminder text and due times are not included. Automated tests independently cover payload and service-worker privacy.
+The observed test notification was generic, with title `You have an R2 reminder` and body `Open R2 and sign in to read it.` The current service worker instead uses `You have an R2 reminder` for both title and body; that wording has not been verified by this historical owner test. Reminder text and due times are not included. Automated tests independently cover payload and service-worker privacy.
 
 Two defects were fixed before these successful results:
 
