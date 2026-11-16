@@ -1,0 +1,60 @@
+# Factory project settings, schema v2. Authoritative when present; no legacy fallback.
+# Prompts, script bodies and credentials stay in separate files. Never put secrets here.
+version = 2
+
+[tracker]
+kind = "github"
+project = "markdlabrecque/r2" # factory:project
+host = "github.com"
+
+[agent]
+family = "openai" # openai|anthropic
+
+# [workflow]
+# mode = "project"
+# directory = ".factory/workflow"
+[instructions]
+common = ["AGENTS.md", "docs/factory-common.md"]
+
+[labels]
+needs_human = "needs-human"
+done = "merged"
+
+[selection]
+# All filters combine with AND. Omit optional filters to disable them; empty strings are invalid.
+# milestone = "Sprint 1"
+# assignee = "@me"
+# author = "alice"
+# search = "accessibility" # tracker-native search, not a local expression language
+exclude_assignees = [] # any match vetoes, including multi-assignee tickets
+[selection.labels]
+all = ["ready-for-agent"] # [] means no required labels
+none = ["blocked", "needs-human", "wontfix"] # [] means no label exclusions
+[selection.order]
+by = "created" # created|updated|popularity (priority only, not eligibility)
+direction = "asc"
+
+[work]
+units = "subtasks" # issues|subtasks; selected parents confer eligibility on open children
+[dispatch]
+max_concurrent = 3 # checked against active runs across the SHARED board
+stagger_seconds = 20
+[merge]
+auto = true # personal profile override; schema default is false
+method = "squash"
+required_checks = ["tests"]
+[graph]
+max_analyses_per_pass = 5
+analysis_timeout_minutes = 10
+conflict_ignore = []
+prune_after_days = 30
+[ci]
+wait_minutes = 30
+no_pipeline_minutes = 5
+[sandbox]
+image = "r2-factory" # factory:image
+# Install locked application dependencies inside the sandbox, not the host.
+[[sandbox.setup]]
+command = 'npm ci'
+timeout_ms = 600000
+sudo = false

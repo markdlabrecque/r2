@@ -2,10 +2,14 @@ import type { FastifyInstance } from 'fastify';
 import { authPlugin } from './auth.ts';
 import { loadConfig, type Config } from './config.ts';
 import { systemClock, type Clock } from './contracts.ts';
+import { chatPlugin } from './chat.ts';
 import { openStorage, type SqliteStorage } from './db.ts';
+import { createOpenAIInterpreter } from './openai.ts';
 import { pushPlugin } from './push-routes.ts';
 import { WebPushTransport } from './push.ts';
 import { settingsPlugin } from './settings.ts';
+import { statusPlugin } from './status.ts';
+import { DeliveryWorker } from './worker.ts';
 import { createApp, loggerOptions, type AppDependencies, type FeaturePlugin } from './routes.ts';
 
 export interface RunningService {
@@ -32,6 +36,10 @@ export async function startService(env: NodeJS.ProcessEnv, options: StartOptions
   const clock = options.clock ?? systemClock;
   const config = loadConfig(env, options.checkoutRoot !== undefined ? { checkoutRoot: options.checkoutRoot } : {});
   const storage = openStorage(config.dbPath, clock);
+  // An injected interpreter wins (tests); otherwise OpenAI is used only when configured.
+  const modelInterpreter =
+    options.adapters?.modelInterpreter ??
+    (config.chat.enabled ? createOpenAIInterpreter({ apiKey: config.chat.apiKey.reveal(), model: config.chat.model }) : undefined);
   const pushTransport =
     options.adapters?.pushTransport ??
     (config.push.enabled
@@ -39,6 +47,11 @@ export async function startService(env: NodeJS.ProcessEnv, options: StartOptions
           vapid: { subject: config.push.subject, publicKey: config.push.publicKey, privateKey: config.push.privateKey.reveal() },
         })
       : undefined);
+  // The worker never uses the model: saved reminders deliver with OpenAI disabled.
+  const deliveryWorker =
+    options.adapters?.worker === undefined
+      ? new DeliveryWorker({ storage, clock, pushTransport, forcePaused: config.pauseNotifications })
+      : undefined;
   const app = createApp(
     {
       config,
@@ -46,10 +59,13 @@ export async function startService(env: NodeJS.ProcessEnv, options: StartOptions
       clock,
       logger: options.logger ?? loggerOptions('info'),
       ...options.adapters,
+      ...(deliveryWorker !== undefined ? { worker: deliveryWorker } : {}),
+      ...(modelInterpreter !== undefined ? { modelInterpreter } : {}),
       ...(pushTransport !== undefined ? { pushTransport } : {}),
     },
-    [authPlugin, settingsPlugin, pushPlugin, ...(options.featurePlugins ?? [])],
+    [authPlugin, settingsPlugin, pushPlugin, statusPlugin, chatPlugin, ...(options.featurePlugins ?? [])],
   );
+  deliveryWorker?.setLogger(app.log);
   try {
     await app.listen({ host: config.host, port: config.port });
   } catch (error) {
