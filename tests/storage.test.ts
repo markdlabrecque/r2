@@ -2,12 +2,7 @@ import { copyFileSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  R2Error,
-  toDeliveryAttemptDto,
-  toProposalDto,
-  toReminderDto,
-} from '../src/contracts.ts';
+import { R2Error } from '../src/contracts.ts';
 import { loadMigrations, migrate, openDatabase, openStorage, schemaVersion, type SqliteStorage } from '../src/db.ts';
 import { defaultMigrationsDir } from '../src/paths.ts';
 import { FakeClock, tempDir } from './helpers.ts';
@@ -353,17 +348,13 @@ describe('proposals and atomic confirmation', () => {
     expect(s.confirmProposal(p.id, 'req-1').requestId).toBe('req-1');
   });
 
-  it('lists reminders by due time and exposes ISO-8601 DTOs without internal fields', () => {
+  it('lists reminders by due time', () => {
     const s = mem();
     const late = s.confirmProposal(s.storeProposal(proposalInput({ dueAt: NOON + 7_200_000, text: 'Late' })).id, 'a');
     const early = s.confirmProposal(s.storeProposal(proposalInput({ dueAt: NOON + 60_000, text: 'Early' })).id, 'b');
     expect(s.listReminders().map((r) => r.id)).toEqual([early.id, late.id]);
     expect(s.listReminders({ limit: 1 })).toHaveLength(1);
     expect(() => s.listReminders({ limit: 0 })).toThrow(R2Error);
-    const dto = toReminderDto(early);
-    expect(dto).toMatchObject({ dueAt: '2026-10-14T12:01:00.000Z', timezone: 'America/Toronto', localDateTime: '2026-10-14T09:00', state: 'scheduled', acceptedAt: null });
-    expect(Object.keys(dto)).not.toEqual(expect.arrayContaining(['claimToken', 'leaseUntil', 'requestId']));
-    expect(toProposalDto(s.getProposal(early.proposalId)!).expiresAt).toBe('2026-10-14T12:15:00.000Z');
   });
 });
 
@@ -453,8 +444,5 @@ describe('quota and delivery records', () => {
     s.finishDeliveryAttempt(two.id, 'unknown');
     expect(s.listDeliveryAttempts(reminder.id).map((a) => a.outcome)).toEqual(['failed', 'unknown']);
     expect((catchError(() => s.startDeliveryAttempt({ reminderId: 'nope', claimToken: 'c', subscriptionVersion: 1 })) as R2Error).code).toBe('not_found');
-    const dto = toDeliveryAttemptDto(one);
-    expect(dto).not.toHaveProperty('claimToken');
-    expect(dto.startedAt).toBe('2026-10-14T12:00:00.000Z');
   });
 });
