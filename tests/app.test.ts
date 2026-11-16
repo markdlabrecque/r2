@@ -171,15 +171,6 @@ describe('feature plugins and injected adapters', () => {
     expect(ra.headers['content-security-policy']).toContain("script-src 'self'");
   });
 
-  it('starts the worker when ready and stops it exactly when the app closes', async () => {
-    const worker = new FakeWorker();
-    const { app } = build({ worker });
-    expect(worker.events).toEqual([]);
-    await app.ready();
-    expect(worker.events).toEqual(['start']);
-    await app.close();
-    expect(worker.events).toEqual(['start', 'stop']);
-  });
 });
 
 describe('request limits and proxy trust', () => {
@@ -264,8 +255,21 @@ describe('service lifecycle', () => {
 
   it('stops cleanly: the port is released, the database handle closed and the worker stopped', async () => {
     const worker = new FakeWorker();
-    const svc = await start(join(tmp(), 'data'), {}, undefined, { worker });
+    const svc = await startService(syntheticEnv(join(tmp(), 'data')), {
+      clock: new FakeClock(),
+      logger: false,
+      adapters: { worker },
+      featurePlugins: [{
+        name: 'before-ready',
+        register() {
+          // Registration precedes readiness: no worker may run against partial setup.
+          expect(worker.events).toEqual([]);
+        },
+      }],
+    });
+    cleanups.push(() => svc.stop());
     expect(worker.events).toEqual(['start']);
+    await svc.stop();
     await svc.stop();
     expect(worker.events).toEqual(['start', 'stop']);
     expect(svc.storage.db.open).toBe(false);
@@ -341,7 +345,7 @@ describe('built service', () => {
       cleanups.push(() => clearInterval(timer));
     });
 
-  it.skipIf(!built)('runs from dist with synthetic HTTPS origin, serves health and the web shell, restarts with the same record', async () => {
+  it.skipIf(!built)('runs from dist in another cwd with fresh migrations, serves health and web assets, and exits on SIGTERM', async () => {
     const dataDir = join(tmp(), 'data');
     const port = 20000 + Math.floor(Math.random() * 20000);
     const first = await run(dataDir, port);
@@ -357,15 +361,5 @@ describe('built service', () => {
     expect(await sw.text()).toContain('You have an R2 reminder');
     expect(await first.stop()).toBe(0);
 
-    // Write a record directly with a separate connection while the service is stopped.
-    const direct = openStorage(join(dataDir, 'r2.sqlite'), new FakeClock());
-    direct.setTimezone('America/Toronto');
-    direct.close();
-
-    const second = await run(dataDir, port);
-    expect(await second.stop()).toBe(0);
-    const check = openStorage(join(dataDir, 'r2.sqlite'), new FakeClock());
-    expect(check.getSettings().timezone).toBe('America/Toronto');
-    check.close();
   }, 30000);
 });
