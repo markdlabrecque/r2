@@ -25,5 +25,9 @@ USER ${AGENT_UID}:${AGENT_GID}
 RUN mkdir -p /home/agent/.pi/agent/skills \
     && ln -s /home/agent/.agents/skills/writing-tests /home/agent/.pi/agent/skills/writing-tests
 ENV PATH="/home/agent/.local/bin:$PATH"
+# Synthetic fixtures avoid slow container-layer fsync; evidence stays on disk.
+ENV TMPDIR=/dev/shm
+# Native npm builds use the matching headers already shipped in this Node image.
+ENV npm_package_config_node_gyp_nodedir=/usr/local
 WORKDIR /home/agent
 ENTRYPOINT ["sleep", "infinity"]

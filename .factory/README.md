@@ -32,6 +32,13 @@ with `docker build-image --image-name r2-factory` from the repository root. Its
 default build context is `.factory/`; `.dockerignore` excludes private/state files.
 Do not use a project npm-installed SDK or patch the installed runtime.
 
+Rebuild after changing the Dockerfile or bundled skills, then create fresh
+sandboxes. An existing image/container does not inherit source edits. The image
+sets `TMPDIR=/dev/shm` for synthetic fixtures and
+`npm_package_config_node_gyp_nodedir=/usr/local` for native builds using the
+bundled Node headers. It does not relocate persistent evidence or application
+data. See `../docs/factory-common.md` for storage and durability limits.
+
 Dispatch, dry-run analysis and scheduling are separate operator actions. Setup
 does not authorize running tickets or enabling the scheduler. Commit the tracked
 setup files before dispatch so newly created worktrees include them.
@@ -58,6 +65,32 @@ setup files before dispatch so newly created worktrees include them.
 
 This verifies local environment provisioning, not real Firefox/Tailscale push
 notification delivery or an end-to-end Factory ticket run.
+
+## Temporary-storage verification — 2026-11-16
+
+Rebuilt `r2-factory` using the selected installed runtime's private Sandcastle
+`docker build-image --image-name r2-factory` command against current `main` plus
+this environment change. Verified image ID:
+`sha256:e4ac1c5d2631cf396468ea2dcf1dc69f8532aa9aca53073138dacdf8003f341e`.
+
+A fresh container with a copied checkout (no host credentials, services or socket
+mounts) ran as UID/GID 1000:1000, with Node 24.20.0:
+
+- Confirmed `os.tmpdir()` is `/dev/shm` and created/removed a synthetic fixture.
+- Fresh `npm ci` passed; `better-sqlite3` loaded and queried SQLite 3.54.1.
+- `npm run typecheck` and `npm run build` passed.
+- `npm test`: 19 files passed, 489 tests passed, 1 existing root-only case skipped
+  under non-root execution. No skips, test code or configuration were changed.
+- `npm run test:browser`: both Chromium journeys passed.
+- Default `/dev/shm` capacity was 64 MiB; 3.7 MiB remained in use after the checks.
+  Capacity is bounded and shared with browsers, not guaranteed for larger suites.
+- Verification logs were written outside `TMPDIR` to persistent host storage.
+
+These are synthetic checks, including restart/reopen behavior, not evidence of
+real disk durability or Firefox/Tailscale delivery. No application durability
+code, timeouts, test discovery, CI gates, scheduler state or other tickets were
+changed. No Factory dispatch, recovery, live model/push calls, production access
+or actual host-service/Tailscale operations were performed.
 
 ## Consolidated application baseline
 
