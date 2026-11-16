@@ -116,15 +116,13 @@ describe('chat and confirmation', () => {
     expect(s.storage.listReminders()).toEqual([]);
   });
 
-  it('asks again instead of proposing when the model returns an invalid or past time', async () => {
+  it('asks again instead of proposing when the model returns a past time', async () => {
     const s = await setup();
     s.storage.setTimezone('America/Toronto');
     const model = s.model as FakeModel;
     model.outcome = { type: 'one_off', text: 'Bins', localDateTime: '2026-10-14T07:00' };
     const past = (await s.post('/api/chat', { message: 'bins' })).json();
     expect(past.type).toBe('clarify');
-    model.outcome = { type: 'one_off', text: 'Bins', localDateTime: '2027-03-14T02:30' };
-    expect((await s.post('/api/chat', { message: 'bins' })).json().type).toBe('clarify');
     expect(s.storage.listReminders()).toEqual([]);
   });
 

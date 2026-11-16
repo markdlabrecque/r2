@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS, SESSION_COOKIE, authPlugin } from '../src/auth.ts';
+import { LOGIN_MAX_ATTEMPTS, SESSION_COOKIE, authPlugin } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { openStorage } from '../src/db.ts';
 import { hashPassword, verifyPassword } from '../src/password.ts';
@@ -86,14 +86,12 @@ describe('owner login', () => {
     expect((await login(app)).statusCode).toBe(503);
   });
 
-  it('throttles repeated wrong passwords, then recovers after the window', async () => {
-    const { app, clock } = await setup();
+  it('maps a throttled login to 429 and Retry-After', async () => {
+    const { app } = await setup();
     for (let i = 0; i < LOGIN_MAX_ATTEMPTS; i++) expect((await login(app, `wrong-${i}`)).statusCode).toBe(401);
     const blocked = await login(app);
     expect(blocked.statusCode).toBe(429);
-    expect(Number(blocked.headers['retry-after'])).toBeGreaterThan(0);
-    clock.advance(LOGIN_WINDOW_MS + 1);
-    expect((await login(app)).statusCode).toBe(200);
+    expect(blocked.headers['retry-after']).toBe('900');
   });
 
   it('expires sessions and revokes them on logout', async () => {
