@@ -80,7 +80,7 @@ describe('endpoint validation', () => {
 });
 
 describe('status classification', () => {
-  it('separates acceptance, retryable and permanent outcomes, and never follows redirects', () => {
+  it('separates acceptance, retryable and permanent outcomes, including redirect rejection', () => {
     expect(classifyStatus(201)).toEqual({ outcome: 'accepted', httpStatus: 201 });
     for (const s of [404, 410]) expect(classifyStatus(s)).toMatchObject({ retryable: false, code: 'subscription_gone' });
     for (const s of [408, 429, 500, 503]) expect(classifyStatus(s)).toMatchObject({ retryable: true, code: 'temporary' });
