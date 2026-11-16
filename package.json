@@ -14,6 +14,10 @@
     "start": "node dist/server/main.js",
     "typecheck": "tsc -p tsconfig.json && tsc -p web/tsconfig.json && tsc -p web/tsconfig.sw.json",
     "test": "vitest run",
+    "test:functional": "R2_TEST_TIER=functional vitest run",
+    "test:nightly": "R2_TEST_TIER=nightly vitest run",
+    "test:smoke": "R2_TEST_TIER=smoke vitest run",
+    "test:all": "R2_TEST_TIER=all vitest run",
     "test:browser": "playwright test"
   },
   "devDependencies": {

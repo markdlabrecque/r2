@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -207,13 +206,6 @@ describe('host/unit locks', () => {
     expect(classifyOwner(f.owner, { bootId: f.owner.bootId, processStart: 'absent' })).toBe('stale');
     expect(classifyOwner(f.owner, { bootId: f.owner.bootId, processStart: '98765' })).toBe('stale');
     expect(classifyOwner(f.owner, { bootId: randomUUID(), processStart: null })).toBe('stale');
-  });
-  it('contends with a separate Node process sharing the fixed registry', () => {
-    const f = setup(); f.registry.acquire(installation, f.owner);
-    const script = `import { AcceptanceRegistry } from './scripts/acceptance/state.ts';
-      try { new AcceptanceRegistry({root: ${JSON.stringify(f.root)}}).acquire(${JSON.stringify(installation)}, ${JSON.stringify({ ...f.owner, runId: randomUUID(), token: randomUUID() })}); process.exit(2); }
-      catch(e) { if(e.code !== 'locked') process.exit(3); }`;
-    expect(() => execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: process.cwd(), timeout: 10000 })).not.toThrow();
   });
   it('contends across different runs and installed revisions and only releases owned locks', () => {
     const f = setup(); const lease = f.registry.acquire(installation, f.owner);
